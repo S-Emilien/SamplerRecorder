@@ -1,0 +1,33 @@
+## .NET build output
+bin/
+obj/
+
+## NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Visual Studio Code
+.vscode/
+
+## Rider
+.idea/
+
+## Qoder
+.qoder/
+
+## OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+## Publish output
+publish/
