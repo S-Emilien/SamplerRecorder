@@ -315,11 +315,7 @@
                         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBlock Text="Clips" FontWeight="SemiBold" FontSize="13"
                                        VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <Button Content="Export" Command="{Binding ExportClipCommand}"
-                                    Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
                             <Button Content="Export All" Command="{Binding ExportAllClipsCommand}"
-                                    Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
-                            <Button Content="Delete" Command="{Binding DeleteClipCommand}"
                                     Padding="8,3" FontSize="11"/>
                         </StackPanel>
                         <ListBox ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}"
@@ -327,6 +323,20 @@
                             <ListBox.ItemTemplate>
                                 <DataTemplate DataType="{x:Type vm:ClipItemViewModel}">
                                     <DockPanel>
+                                        <!-- Inline action buttons -->
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="6,0,0,0">
+                                            <TextBlock Text="&#x2713;" Foreground="{StaticResource SuccessBrush}"
+                                                       FontWeight="Bold" FontSize="13" VerticalAlignment="Center"
+                                                       Margin="0,0,6,0"
+                                                       Visibility="{Binding IsExported, Converter={StaticResource BoolToVis}}"
+                                                       ToolTip="Exported"/>
+                                            <Button Content="&#x1F4E4;" Command="{Binding DataContext.ExportClipCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="4,2" Margin="0,0,3,0"
+                                                    FontSize="11" Width="26" Height="22" ToolTip="Export"/>
+                                            <Button Content="&#x2715;" Command="{Binding DataContext.DeleteClipCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="4,2"
+                                                    FontSize="11" Width="26" Height="22" ToolTip="Delete"/>
+                                        </StackPanel>
                                         <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}"
                                                    Foreground="{StaticResource TextDimBrush}"
                                                    FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>

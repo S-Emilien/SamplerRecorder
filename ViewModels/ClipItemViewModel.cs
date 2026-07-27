@@ -18,6 +18,9 @@ public partial class ClipItemViewModel : ObservableObject
     [ObservableProperty]
     private string _name = string.Empty;
 
+    [ObservableProperty]
+    private bool _isExported;
+
     public string DurationText
     {
         get

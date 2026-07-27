@@ -283,19 +283,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
         var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
 
-        var fileName = AudioExportService.GetSafeFileName(clipVm.Name) + ".mp3";
-        var outputPath = Path.Combine(_settings.ExportPath, fileName);
+        var baseName = AudioExportService.GetSafeFileName(clipVm.Name);
+        var outputPath = GetUniqueExportPath(baseName, ".mp3");
 
         try
         {
             _exportService.ExportRegionToMp3(pcmData, format, clipVm.StartMs, clipVm.EndMs,
                 outputPath, _settings.Mp3BitRate);
-            StatusText = $"Exported: {fileName}";
+            clipVm.IsExported = true;
+            StatusText = $"Exported: {Path.GetFileName(outputPath)}";
         }
         catch (Exception ex)
         {
             StatusText = $"Export failed: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Returns a unique file path, appending (1), (2), etc. if the file already exists.
+    /// </summary>
+    private string GetUniqueExportPath(string baseName, string extension)
+    {
+        var dir = _settings.ExportPath;
+        Directory.CreateDirectory(dir);
+
+        var candidate = Path.Combine(dir, baseName + extension);
+        int counter = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.Combine(dir, $"{baseName} ({counter}){extension}");
+            counter++;
+        }
+        return candidate;
     }
 
     [RelayCommand]
