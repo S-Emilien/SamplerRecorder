@@ -222,7 +222,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             RefreshSessionsList();
         }
 
-        StatusText = $"Recording saved. Duration: {FormatTime(TotalDurationMs)}";
+        StatusText = $"Recording saved. Duration: {FormatTimeFull(TotalDurationMs)}";
     }
 
     [RelayCommand]
@@ -591,6 +591,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
+    private static string FormatTimeFull(long ms)
+    {
+        var ts = TimeSpan.FromMilliseconds(ms);
+        return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+    }
+
     private static string FormatTimePrecise(long ms)
     {
         var ts = TimeSpan.FromMilliseconds(ms);
@@ -660,7 +666,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _currentSession = session;
         SelectionStart = -1;
         SelectionEnd = -1;
-        StatusText = $"Loaded: {FormatTime(TotalDurationMs)}";
+        StatusText = $"Loaded: {FormatTimeFull(TotalDurationMs)}";
     }
 
     private byte[]? _loadedPcmData;
