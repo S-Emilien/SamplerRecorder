@@ -122,14 +122,27 @@
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <DockPanel Margin="2,4">
-                                        <TextBlock DockPanel.Dock="Right"
-                                                   Text="{Binding DurationText}"
-                                                   Foreground="{StaticResource TextDimBrush}"
-                                                   FontSize="11" VerticalAlignment="Center"/>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Button Content="&#x1F4DD;" Command="{Binding DataContext.EditSessionNoteCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="0"
+                                                    Width="22" Height="22" FontSize="11" ToolTip="Edit Note"
+                                                    VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            <TextBlock Text="{Binding DurationText}"
+                                                       Foreground="{StaticResource TextDimBrush}"
+                                                       FontSize="11" VerticalAlignment="Center"
+                                                       FontFamily="Consolas" Margin="10,0,0,0"/>
+                                        </StackPanel>
                                         <StackPanel>
                                             <TextBlock Text="{Binding Name}" FontSize="13"/>
-                                            <TextBlock Text="{Binding DateText}" FontSize="10"
-                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding DateText}" FontSize="10"
+                                                           Foreground="{StaticResource TextDimBrush}"/>
+                                                <TextBlock Text="{Binding Note}" FontSize="10"
+                                                           Foreground="#FFD700" Margin="14,0,0,0"
+                                                           MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center"
+                                                           Visibility="{Binding HasNote, Converter={StaticResource BoolToVis}}"/>
+                                            </StackPanel>
                                         </StackPanel>
                                     </DockPanel>
                                 </DataTemplate>
@@ -143,12 +156,8 @@
                         Padding="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
                     <DockPanel>
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="All Clips" FontWeight="SemiBold" FontSize="14"
-                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <Button Content="Export All" Command="{Binding ExportAllClipsCommand}"
-                                        Padding="8,3" FontSize="11"/>
-                            </StackPanel>
+                            <TextBlock Text="All Clips" FontWeight="SemiBold" FontSize="14"
+                                       VerticalAlignment="Center"/>
                             <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenClipsFolderCommand}"
                                     HorizontalAlignment="Right" Padding="8,3" FontSize="11"/>
                         </DockPanel>
@@ -157,14 +166,27 @@
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <DockPanel Margin="2,3">
-                                        <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}"
-                                                   Foreground="{StaticResource TextDimBrush}"
-                                                   FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Name}" FontSize="12"/>
-                                            <TextBlock Text="{Binding SourceRecordingName}" FontSize="10"
-                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,0,0,0">
+                                            <Button Command="{Binding DataContext.PlayClipFileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="0" Margin="0,0,3,0"
+                                                    Width="24" Height="24" ToolTip="Play/Pause">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Content" Value="&#x25B6;"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                                <Setter Property="Content" Value="&#x23F8;"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Content="&#x23F9;" Command="{Binding DataContext.StopClipFileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="0"
+                                                    Width="24" Height="24" ToolTip="Stop"/>
                                         </StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontSize="12" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"/>
                                     </DockPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>

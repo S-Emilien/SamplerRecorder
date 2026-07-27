@@ -95,7 +95,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _statusText = "Ready";
     [ObservableProperty] private string _editorTitle = "Editor";
     [ObservableProperty] private ObservableCollection<SessionItemViewModel> _savedSessions = new();
-    [ObservableProperty] private ObservableCollection<ClipItemViewModel> _allClips = new();
+    [ObservableProperty] private ObservableCollection<AllClipsItemViewModel> _allClips = new();
+
+    // --- Clip file playback (independent from editor playback) ---
+    private IWavePlayer? _clipPlayer;
+    private WaveStream? _clipStream;
+    private AllClipsItemViewModel? _playingClip;
+    private bool _isClipPlaying;
 
     public bool IsRecordingActive => RecordingState != RecordingState.Idle;
     public bool CanStartRecording => RecordingState == RecordingState.Idle;
@@ -686,6 +692,153 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
     }
 
+    [RelayCommand]
+    private void PlayClipFile(AllClipsItemViewModel? clipVm)
+    {
+        if (clipVm == null) return;
+
+        // If this clip is currently playing, pause/resume it
+        if (_isClipPlaying && _playingClip == clipVm)
+        {
+            // Pause
+            _clipPlayer?.Pause();
+            _isClipPlaying = false;
+            clipVm.IsPlaying = false;
+            return;
+        }
+
+        // If paused and same clip, resume
+        if (!_isClipPlaying && _playingClip == clipVm && _clipPlayer != null)
+        {
+            _clipPlayer.Play();
+            _isClipPlaying = true;
+            clipVm.IsPlaying = true;
+            return;
+        }
+
+        // Stop any current clip playback
+        StopClipPlaybackInternal();
+
+        // Start playing the new clip
+        try
+        {
+            WaveStream stream;
+            var ext = Path.GetExtension(clipVm.FilePath).ToLowerInvariant();
+            if (ext == ".mp3")
+                stream = new Mp3FileReader(clipVm.FilePath);
+            else
+                stream = new AudioFileReader(clipVm.FilePath);
+
+            _clipPlayer?.Dispose();
+            _clipPlayer = new WaveOutEvent();
+            _clipPlayer.Init(stream);
+            _clipPlayer.PlaybackStopped += (s, e) =>
+            {
+                if (_playingClip == clipVm && _isClipPlaying)
+                {
+                    _isClipPlaying = false;
+                    clipVm.IsPlaying = false;
+                    _playingClip = null;
+                    _clipStream?.Dispose();
+                    _clipStream = null;
+                    _clipPlayer?.Dispose();
+                    _clipPlayer = null;
+                }
+            };
+            _clipPlayer.Play();
+            _clipStream = stream;
+            _playingClip = clipVm;
+            _isClipPlaying = true;
+            clipVm.IsPlaying = true;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Playback failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void StopClipFile(AllClipsItemViewModel? clipVm)
+    {
+        if (clipVm == null) return;
+        if (_playingClip != clipVm) return;
+
+        StopClipPlaybackInternal();
+    }
+
+    private void StopClipPlaybackInternal()
+    {
+        if (_playingClip != null)
+            _playingClip.IsPlaying = false;
+
+        _isClipPlaying = false;
+        _playingClip = null;
+        _clipPlayer?.Stop();
+        _clipPlayer?.Dispose();
+        _clipPlayer = null;
+        _clipStream?.Dispose();
+        _clipStream = null;
+    }
+
+    [RelayCommand]
+    private void EditSessionNote(SessionItemViewModel? sessionVm)
+    {
+        if (sessionVm == null) return;
+
+        var currentNote = sessionVm.Note;
+        var input = ShowNoteInputDialog(currentNote);
+        if (input == null) return; // cancelled
+
+        sessionVm.Note = input;
+        _sessionStore.UpdateSessionMetadata(sessionVm.Session);
+    }
+
+    private static string? ShowNoteInputDialog(string currentNote)
+    {
+        var dialog = new Window
+        {
+            Title = "Recording Note",
+            Width = 350,
+            Height = 160,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = Application.Current.MainWindow,
+            ResizeMode = ResizeMode.NoResize
+        };
+
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(12) };
+        var textBox = new System.Windows.Controls.TextBox
+        {
+            Text = currentNote,
+            Height = 60,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto
+        };
+        var buttonPanel = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        var okButton = new System.Windows.Controls.Button { Content = "OK", Width = 70, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+        var cancelButton = new System.Windows.Controls.Button { Content = "Cancel", Width = 70, IsCancel = true };
+        buttonPanel.Children.Add(okButton);
+        buttonPanel.Children.Add(cancelButton);
+        panel.Children.Add(textBox);
+        panel.Children.Add(buttonPanel);
+        dialog.Content = panel;
+
+        string? result = null;
+        okButton.Click += (_, _) =>
+        {
+            result = textBox.Text.Trim();
+            dialog.DialogResult = true;
+        };
+
+        var dialogResult = dialog.ShowDialog();
+        return dialogResult == true ? result : null;
+    }
+
     public void RefreshSessionsList()
     {
         SavedSessions.Clear();
@@ -695,12 +848,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var (dir, session) in sessions)
         {
             SavedSessions.Add(new SessionItemViewModel(session));
-            foreach (var clip in session.Clips)
-            {
-                var clipVm = new ClipItemViewModel(clip);
-                clipVm.Initialize();
-                AllClips.Add(clipVm);
-            }
+        }
+
+        // Populate All Clips from actual files in the export folder
+        RefreshAllClipsFromFolder();
+    }
+
+    private void RefreshAllClipsFromFolder()
+    {
+        AllClips.Clear();
+        var dir = _settings.ExportPath;
+        if (!Directory.Exists(dir)) return;
+
+        var extensions = new[] { ".mp3", ".wav", ".ogg", ".flac", ".m4a" };
+        var files = Directory.GetFiles(dir)
+            .Where(f => extensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+            .OrderByDescending(f => File.GetCreationTimeUtc(f));
+
+        foreach (var file in files)
+        {
+            AllClips.Add(new AllClipsItemViewModel(file));
         }
     }
 
@@ -729,6 +896,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _uiTimer.Stop();
         _hotkeyService.UnregisterAll();
+        StopClipPlaybackInternal();
         _wavePlayer?.Dispose();
         _playbackStream?.Dispose();
         _captureService.Dispose();

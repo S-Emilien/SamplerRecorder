@@ -13,4 +13,5 @@ public sealed class RecordingSession
     public List<Marker> Markers { get; set; } = new();
     public List<AudioClip> Clips { get; set; } = new();
     public string? AudioFilePath { get; set; }
+    public string? Note { get; set; }
 }
