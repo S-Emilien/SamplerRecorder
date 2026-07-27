@@ -108,6 +108,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string SelectionLengthText => SelectionStart >= 0 && SelectionEnd > SelectionStart
         ? FormatTimePrecise(SelectionEnd - SelectionStart) : "0:00.000";
 
+    public string PlaybackPositionText
+    {
+        get
+        {
+            var ts = TimeSpan.FromMilliseconds(PlaybackPosition);
+            return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+        }
+    }
+
     partial void OnRecordingStateChanged(RecordingState value)
     {
         OnPropertyChanged(nameof(IsRecordingActive));
@@ -118,6 +127,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
     partial void OnSelectionStartChanged(long value) { OnPropertyChanged(nameof(SelectionStartText)); OnPropertyChanged(nameof(SelectionLengthText)); }
     partial void OnSelectionEndChanged(long value) { OnPropertyChanged(nameof(SelectionEndText)); OnPropertyChanged(nameof(SelectionLengthText)); }
+    partial void OnPlaybackPositionChanged(double value) { OnPropertyChanged(nameof(PlaybackPositionText)); }
 
     public WaveformDataService WaveformService => _waveformService;
     public AppSettings Settings => _settings;

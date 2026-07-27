@@ -221,18 +221,9 @@
             <Border Grid.Row="1" Background="{StaticResource BgMediumBrush}" Padding="10,5"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Left" Text="{Binding ElapsedTime}" FontSize="18"
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding PlaybackPositionText}" FontSize="18"
                                FontWeight="Bold" FontFamily="Consolas" VerticalAlignment="Center"
                                Foreground="{StaticResource SuccessBrush}" Margin="0,0,16,0"/>
-
-                    <!-- Peak meter -->
-                    <Grid DockPanel.Dock="Left" Width="80" Height="10" Margin="0,0,16,0"
-                          VerticalAlignment="Center">
-                        <Border Background="{StaticResource BgLightBrush}" CornerRadius="3"/>
-                        <Border Background="{StaticResource AccentBrush}" CornerRadius="3"
-                                HorizontalAlignment="Left"
-                                Width="{Binding CurrentPeak, Converter={StaticResource PeakToWidth}, ConverterParameter=80}"/>
-                    </Grid>
 
                     <!-- Playback controls -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
