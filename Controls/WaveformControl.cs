@@ -16,13 +16,16 @@ public class WaveformControl : FrameworkElement
     private readonly List<Visual> _visuals = new();
 
     // Interaction state
-    private bool _isDragging;
-    private bool _isSelecting;
+    private bool _isPanning;           // left-drag pans the view
+    private bool _isSelecting;         // right-drag creates selection
     private bool _isResizingLeft;
     private bool _isResizingRight;
+    private bool _leftDown;
+    private bool _leftDragConfirmed;   // true once movement exceeds threshold
     private Point _dragStart;
     private double _dragStartViewMs;
-    private const double HandleWidth = 8; // pixels for resize handle hit zone
+    private const double HandleWidth = 8;    // pixels for resize handle hit zone
+    private const double DragThreshold = 5;  // pixels before a left-click becomes a pan
 
     // Dependencies
     public WaveformDataService? WaveformService { get; set; }
@@ -34,6 +37,9 @@ public class WaveformControl : FrameworkElement
     public double PlaybackPositionMs { get; set; } = -1;
     public long SelectionStartMs { get; set; } = -1;
     public long SelectionEndMs { get; set; } = -1;
+
+    /// <summary>True while a right-button selection/resize drag is in progress.</summary>
+    public bool IsSelectingInteraction => _isSelecting || _isResizingLeft || _isResizingRight;
 
     // Events
     public event Action<double, double>? ViewChanged;
@@ -66,6 +72,9 @@ public class WaveformControl : FrameworkElement
         MouseRightButtonUp += OnMouseRightButtonUp;
         MouseMove += OnMouseMove;
         SizeChanged += (_, _) => Redraw();
+
+        // Suppress default context menu so right-drag selection works reliably
+        ContextMenuOpening += (s, e) => e.Handled = true;
     }
 
     protected override int VisualChildrenCount => _visuals.Count;
@@ -100,10 +109,10 @@ public class WaveformControl : FrameworkElement
             new Point(0, midY), new Point(width, midY));
 
         // Draw selection region with edge handles
-        if (SelectionStartMs >= 0 && SelectionEndMs > SelectionStartMs)
+        if (SelectionStartMs >= 0 && SelectionEndMs >= 0 && SelectionEndMs != SelectionStartMs)
         {
-            double x1 = MsToX(SelectionStartMs, width);
-            double x2 = MsToX(SelectionEndMs, width);
+            double x1 = MsToX(Math.Min(SelectionStartMs, SelectionEndMs), width);
+            double x2 = MsToX(Math.Max(SelectionStartMs, SelectionEndMs), width);
             dc.DrawRectangle(new SolidColorBrush(SelectionColor), null,
                 new Rect(x1, 0, x2 - x1, height));
 
@@ -282,12 +291,43 @@ public class WaveformControl : FrameworkElement
         Redraw();
     }
 
+    // --- Left button: click = seek, drag = pan ---
+
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(this);
         CaptureMouse();
         _dragStart = pos;
         _dragStartViewMs = ViewStartMs;
+        _leftDown = true;
+        _leftDragConfirmed = false;
+        _isPanning = false;
+    }
+
+    private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_leftDown && !_leftDragConfirmed)
+        {
+            // It was a click (no significant drag) → seek to position
+            var pos = e.GetPosition(this);
+            double ms = XToMs(pos.X, ActualWidth);
+            SeekRequested?.Invoke(ms);
+        }
+
+        _leftDown = false;
+        _leftDragConfirmed = false;
+        _isPanning = false;
+        ReleaseMouseCapture();
+        Redraw();
+    }
+
+    // --- Right button: drag = region selection, with resize handles ---
+
+    private void OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var pos = e.GetPosition(this);
+        CaptureMouse();
+        _dragStart = pos;
 
         // Check if clicking on a selection resize handle
         if (SelectionStartMs >= 0 && SelectionEndMs > SelectionStartMs)
@@ -307,13 +347,14 @@ public class WaveformControl : FrameworkElement
             }
         }
 
-        // Default: start a new selection (drag to select)
+        // Start a new selection
         _isSelecting = true;
         SelectionStartMs = (long)XToMs(pos.X, ActualWidth);
         SelectionEndMs = SelectionStartMs;
+        Redraw();
     }
 
-    private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(this);
 
@@ -323,13 +364,11 @@ public class WaveformControl : FrameworkElement
             if (SelectionEndMs < SelectionStartMs)
                 (SelectionStartMs, SelectionEndMs) = (SelectionEndMs, SelectionStartMs);
 
-            // If selection is too small (< 50ms), treat as a click = seek
+            // If selection is too small (< 50ms), discard it
             if (SelectionEndMs - SelectionStartMs < 50)
             {
-                double ms = XToMs(pos.X, ActualWidth);
                 SelectionStartMs = -1;
                 SelectionEndMs = -1;
-                SeekRequested?.Invoke(ms);
             }
             else
             {
@@ -343,7 +382,6 @@ public class WaveformControl : FrameworkElement
             SelectionChanged?.Invoke(SelectionStartMs, SelectionEndMs);
         }
 
-        _isDragging = false;
         _isSelecting = false;
         _isResizingLeft = false;
         _isResizingRight = false;
@@ -355,52 +393,75 @@ public class WaveformControl : FrameworkElement
     {
         var pos = e.GetPosition(this);
 
-        // Update cursor when hovering over resize handles
-        if (e.LeftButton != MouseButtonState.Pressed)
+        // --- Left button: pan or confirm drag ---
+        if (e.LeftButton == MouseButtonState.Pressed && _leftDown)
         {
-            if (SelectionStartMs >= 0 && SelectionEndMs > SelectionStartMs)
+            if (!_leftDragConfirmed)
             {
-                double startX = MsToX(SelectionStartMs, ActualWidth);
-                double endX = MsToX(SelectionEndMs, ActualWidth);
-                if (Math.Abs(pos.X - startX) <= HandleWidth || Math.Abs(pos.X - endX) <= HandleWidth)
-                    Cursor = Cursors.SizeWE;
-                else
-                    Cursor = Cursors.Cross;
+                double dist = Math.Abs(pos.X - _dragStart.X);
+                if (dist >= DragThreshold)
+                {
+                    _leftDragConfirmed = true;
+                    _isPanning = true;
+                }
             }
-            else
+
+            if (_isPanning)
             {
-                Cursor = Cursors.Cross;
+                double dxMs = (pos.X - _dragStart.X) / ActualWidth * (ViewEndMs - ViewStartMs);
+                double viewDuration = ViewEndMs - ViewStartMs;
+                ViewStartMs = _dragStartViewMs - dxMs;
+                ViewEndMs = ViewStartMs + viewDuration;
+                ClampView();
+                ViewChanged?.Invoke(ViewStartMs, ViewEndMs);
+                Redraw();
             }
             return;
         }
 
-        if (_isResizingLeft)
+        // --- Right button: selection / resize ---
+        if (e.RightButton == MouseButtonState.Pressed)
         {
-            SelectionStartMs = (long)XToMs(pos.X, ActualWidth);
-            SelectionChanged?.Invoke(SelectionStartMs, SelectionEndMs);
-            Redraw();
+            if (_isResizingLeft)
+            {
+                SelectionStartMs = (long)XToMs(pos.X, ActualWidth);
+                long s = Math.Min(SelectionStartMs, SelectionEndMs);
+                long en = Math.Max(SelectionStartMs, SelectionEndMs);
+                SelectionChanged?.Invoke(s, en);
+                Redraw();
+            }
+            else if (_isResizingRight)
+            {
+                SelectionEndMs = (long)XToMs(pos.X, ActualWidth);
+                long s = Math.Min(SelectionStartMs, SelectionEndMs);
+                long en = Math.Max(SelectionStartMs, SelectionEndMs);
+                SelectionChanged?.Invoke(s, en);
+                Redraw();
+            }
+            else if (_isSelecting)
+            {
+                SelectionEndMs = (long)XToMs(pos.X, ActualWidth);
+                long s = Math.Min(SelectionStartMs, SelectionEndMs);
+                long en = Math.Max(SelectionStartMs, SelectionEndMs);
+                SelectionChanged?.Invoke(s, en);
+                Redraw();
+            }
+            return;
         }
-        else if (_isResizingRight)
+
+        // --- Hover: update cursor ---
+        if (SelectionStartMs >= 0 && SelectionEndMs > SelectionStartMs)
         {
-            SelectionEndMs = (long)XToMs(pos.X, ActualWidth);
-            SelectionChanged?.Invoke(SelectionStartMs, SelectionEndMs);
-            Redraw();
+            double startX = MsToX(SelectionStartMs, ActualWidth);
+            double endX = MsToX(SelectionEndMs, ActualWidth);
+            if (Math.Abs(pos.X - startX) <= HandleWidth || Math.Abs(pos.X - endX) <= HandleWidth)
+                Cursor = Cursors.SizeWE;
+            else
+                Cursor = Cursors.Cross;
         }
-        else if (_isSelecting)
+        else
         {
-            SelectionEndMs = (long)XToMs(pos.X, ActualWidth);
-            SelectionChanged?.Invoke(SelectionStartMs, SelectionEndMs);
-            Redraw();
-        }
-        else if (_isDragging)
-        {
-            double dxMs = (pos.X - _dragStart.X) / ActualWidth * (ViewEndMs - ViewStartMs);
-            double viewDuration = ViewEndMs - ViewStartMs;
-            ViewStartMs = _dragStartViewMs - dxMs;
-            ViewEndMs = ViewStartMs + viewDuration;
-            ClampView();
-            ViewChanged?.Invoke(ViewStartMs, ViewEndMs);
-            Redraw();
+            Cursor = Cursors.Cross;
         }
     }
 
@@ -413,20 +474,6 @@ public class WaveformControl : FrameworkElement
         if (ViewStartMs < 0) { ViewStartMs = 0; ViewEndMs = duration; }
         if (ViewEndMs > total) { ViewEndMs = total; ViewStartMs = total - duration; }
         if (ViewStartMs < 0) ViewStartMs = 0;
-    }
-
-    private void OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        CaptureMouse();
-        _dragStart = e.GetPosition(this);
-        _dragStartViewMs = ViewStartMs;
-        _isDragging = true;
-    }
-
-    private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        _isDragging = false;
-        ReleaseMouseCapture();
     }
 
     private double TotalDurationMs()

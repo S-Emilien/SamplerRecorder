@@ -39,13 +39,13 @@ public partial class MainWindow : Window
 
         WaveformDisplay.SeekRequested += ms =>
         {
-            _vm.PlaybackPosition = ms;
+            _vm.SeekTo(ms);
         };
 
         // Redraw waveform periodically
         var redrawTimer = new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(80)
+            Interval = TimeSpan.FromMilliseconds(16)
         };
         redrawTimer.Tick += (_, _) =>
         {
@@ -54,8 +54,14 @@ public partial class MainWindow : Window
                 WaveformDisplay.PlaybackPositionMs = _vm.PlaybackPosition;
                 WaveformDisplay.ViewStartMs = _vm.ViewStartMs;
                 WaveformDisplay.ViewEndMs = _vm.ViewEndMs;
-                WaveformDisplay.SelectionStartMs = _vm.SelectionStart;
-                WaveformDisplay.SelectionEndMs = _vm.SelectionEnd;
+
+                // Don't overwrite selection while user is actively dragging it
+                if (!WaveformDisplay.IsSelectingInteraction)
+                {
+                    WaveformDisplay.SelectionStartMs = _vm.SelectionStart;
+                    WaveformDisplay.SelectionEndMs = _vm.SelectionEnd;
+                }
+
                 WaveformDisplay.Markers = new List<Marker>(_vm.Markers);
                 WaveformDisplay.Redraw();
             }
@@ -88,6 +94,7 @@ public partial class MainWindow : Window
 
     private void SwitchToHome()
     {
+        _vm.ResetEditorState();
         EditorScreen.Visibility = Visibility.Collapsed;
         HomeScreen.Visibility = Visibility.Visible;
         _vm.RefreshSessionsList();

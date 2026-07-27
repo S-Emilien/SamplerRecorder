@@ -234,24 +234,22 @@
                                 Width="{Binding CurrentPeak, Converter={StaticResource PeakToWidth}, ConverterParameter=80}"/>
                     </Grid>
 
-                    <!-- Speed -->
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <TextBlock Text="Speed:" VerticalAlignment="Center" Margin="0,0,6,0"
-                                   Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
-                        <Button Content="1x" Command="{Binding SetPlaybackSpeedCommand}"
-                                CommandParameter="1.0" Padding="6,2" Margin="0,0,3,0" FontSize="11"/>
-                        <Button Content="1.5x" Command="{Binding SetPlaybackSpeedCommand}"
-                                CommandParameter="1.5" Padding="6,2" Margin="0,0,3,0" FontSize="11"/>
-                        <Button Content="2x" Command="{Binding SetPlaybackSpeedCommand}"
-                                CommandParameter="2.0" Padding="6,2" FontSize="11"/>
-                    </StackPanel>
-
                     <!-- Playback controls -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <Button Content="&#x23EE;" Command="{Binding PreviousMarkerCommand}"
                                 Padding="8,4" Margin="0,0,4,0" ToolTip="Previous Marker"/>
-                        <Button Content="&#x25B6; Play" Command="{Binding PlayCommand}"
-                                Padding="10,4" Margin="0,0,4,0"/>
+                        <Button Command="{Binding PlayCommand}" Padding="10,4" Margin="0,0,4,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Content" Value="&#x25B6; Play"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCurrentlyPlaying}" Value="True">
+                                            <Setter Property="Content" Value="&#x23F8; Pause"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="&#x23F9;" Command="{Binding StopPlaybackCommand}"
                                 Padding="8,4" Margin="0,0,4,0"/>
                         <Button Content="&#x23ED;" Command="{Binding NextMarkerCommand}"
@@ -301,9 +299,13 @@
                                 Padding="5,2" FontSize="10"/>
                     </StackPanel>
 
-                    <!-- Center: Create clip -->
-                    <Button Content="+ Create Clip from Selection" Command="{Binding CreateClipCommand}"
-                            Style="{StaticResource AccentButton}" HorizontalAlignment="Center" Padding="12,4"/>
+                    <!-- Center: Play selection + Create clip -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button Content="&#x25B6; Play Selection" Command="{Binding PlaySelectionCommand}"
+                                Padding="10,4" Margin="0,0,8,0"/>
+                        <Button Content="+ Create Clip from Selection" Command="{Binding CreateClipCommand}"
+                                Style="{StaticResource AccentButton}" Padding="12,4"/>
+                    </StackPanel>
                 </DockPanel>
             </Border>
 
@@ -383,7 +385,7 @@
             <!-- Editor Status Bar -->
             <Border Grid.Row="5" Background="{StaticResource BgMediumBrush}" Padding="8,4"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-                <TextBlock Text="Drag to select region | Drag edges to resize | Scroll to zoom | Right-drag to pan | Click to seek"
+                <TextBlock Text="Left-click: seek | Left-drag: pan | Right-drag: select region | Drag edges to resize | Scroll to zoom"
                            Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
             </Border>
         </Grid>

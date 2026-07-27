@@ -27,6 +27,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private IWavePlayer? _wavePlayer;
     private WaveStream? _playbackStream;
     private bool _isPlaying;
+    private int _playbackSessionId; // guards against stale PlaybackStopped events
+    private long _playClipEndMs = -1; // when >= 0, playback auto-pauses at this boundary
 
     public MainViewModel()
     {
@@ -56,7 +58,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _captureService.SoundDetected += OnSoundDetected;
         _captureService.SilenceSkipChanged += OnSilenceSkipChanged;
 
-        _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _uiTimer.Tick += UiTimer_Tick;
 
         RegisterHotkeys();
@@ -86,7 +88,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double _viewEndMs = 60000; // default 60s view
     [ObservableProperty] private double _playbackPosition;
     [ObservableProperty] private bool _isCurrentlyPlaying;
-    [ObservableProperty] private double _playbackSpeed = 1.0;
 
     [ObservableProperty] private long _selectionStart = -1;
     [ObservableProperty] private long _selectionEnd = -1;
@@ -311,25 +312,71 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_isPlaying)
         {
-            StopPlayback();
+            // Pause: stop audio but retain position
+            _playbackSessionId++; // invalidate stale events
+            _wavePlayer?.Stop();
+            _wavePlayer?.Dispose();
+            _wavePlayer = null;
+            _playbackStream?.Dispose();
+            _playbackStream = null;
+            _isPlaying = false;
+            IsCurrentlyPlaying = false;
+            // PlaybackPosition is retained for resume
             return;
         }
 
-        // Use loaded PCM data (from saved session) or live recording buffer
+        // Manual play clears clip boundary
+        _playClipEndMs = -1;
+        StartPlaybackFromPosition(PlaybackPosition);
+    }
+
+    [RelayCommand]
+    private void PlaySelection()
+    {
+        if (SelectionStart < 0 || SelectionEnd <= SelectionStart) return;
+
+        // Stop any current playback
+        if (_isPlaying)
+        {
+            _playbackSessionId++;
+            _wavePlayer?.Stop();
+            _wavePlayer?.Dispose();
+            _wavePlayer = null;
+            _playbackStream?.Dispose();
+            _playbackStream = null;
+            _isPlaying = false;
+            IsCurrentlyPlaying = false;
+        }
+
+        _playClipEndMs = SelectionEnd;
+        PlaybackPosition = SelectionStart;
+        StartPlaybackFromPosition(SelectionStart);
+    }
+
+    private void StartPlaybackFromPosition(double positionMs)
+    {
         var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
         if (pcmData.Length == 0) return;
 
         var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
 
-        // Apply speed by adjusting sample rate
-        var playFormat = new WaveFormat((int)(format.SampleRate * PlaybackSpeed), format.BitsPerSample, format.Channels);
-        var stream = new RawSourceWaveStream(new MemoryStream(pcmData), playFormat);
+        var stream = new RawSourceWaveStream(new MemoryStream(pcmData), format);
+
+        if (positionMs > 0)
+        {
+            long bytePos = (long)(positionMs / 1000.0 * format.AverageBytesPerSecond);
+            bytePos -= bytePos % format.BlockAlign;
+            if (bytePos < stream.Length)
+                stream.Position = bytePos;
+        }
 
         _wavePlayer?.Dispose();
         _wavePlayer = new WaveOutEvent();
         _wavePlayer.Init(stream);
+        var sessionId = ++_playbackSessionId;
         _wavePlayer.PlaybackStopped += (s, e) =>
         {
+            if (sessionId != _playbackSessionId) return;
             _isPlaying = false;
             IsCurrentlyPlaying = false;
         };
@@ -343,6 +390,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StopPlayback()
     {
+        _playbackSessionId++; // invalidate any pending stale events
         _wavePlayer?.Stop();
         _wavePlayer?.Dispose();
         _wavePlayer = null;
@@ -351,6 +399,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _isPlaying = false;
         IsCurrentlyPlaying = false;
         PlaybackPosition = 0;
+        _playClipEndMs = -1;
+    }
+
+    /// <summary>
+    /// Seeks to a position in ms. If currently playing, restarts playback from that position.
+    /// </summary>
+    public void SeekTo(double ms)
+    {
+        PlaybackPosition = ms;
+
+        if (_isPlaying)
+        {
+            // Invalidate stale events, then restart from new position
+            _playbackSessionId++;
+            _wavePlayer?.Stop();
+            _wavePlayer?.Dispose();
+            _wavePlayer = null;
+            _playbackStream?.Dispose();
+            _playbackStream = null;
+            _isPlaying = false;
+            IsCurrentlyPlaying = false;
+            Play(); // resumes from PlaybackPosition
+        }
     }
 
     [RelayCommand]
@@ -378,13 +449,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var pos = PlaybackPosition;
         var prev = Markers.Where(m => m.TimestampMs < pos).OrderByDescending(m => m.TimestampMs).FirstOrDefault();
         if (prev != null) JumpToMarker(prev);
-    }
-
-    [RelayCommand]
-    private void SetPlaybackSpeed(string speed)
-    {
-        if (double.TryParse(speed, System.Globalization.CultureInfo.InvariantCulture, out var val))
-            PlaybackSpeed = val;
     }
 
     // --- Event Handlers ---
@@ -449,7 +513,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var format = _playbackStream.WaveFormat;
             PlaybackPosition = (long)(pos / (double)format.AverageBytesPerSecond * 1000);
 
-            if (PlaybackPosition >= TotalDurationMs)
+            // Auto-pause at clip end boundary
+            if (_playClipEndMs >= 0 && PlaybackPosition >= _playClipEndMs)
+            {
+                PlaybackPosition = _playClipEndMs;
+                _playClipEndMs = -1;
+                _playbackSessionId++;
+                _wavePlayer?.Stop();
+                _wavePlayer?.Dispose();
+                _wavePlayer = null;
+                _playbackStream?.Dispose();
+                _playbackStream = null;
+                _isPlaying = false;
+                IsCurrentlyPlaying = false;
+            }
+            else if (PlaybackPosition >= TotalDurationMs)
             {
                 StopPlayback();
             }
@@ -589,6 +667,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AllClips.Add(clipVm);
             }
         }
+    }
+
+    /// <summary>
+    /// Resets all editor/playback state when leaving the editor screen.
+    /// </summary>
+    public void ResetEditorState()
+    {
+        StopPlayback();
+        _loadedPcmData = null;
+        _currentSession = null;
+        _playbackFormat = null;
+        Clips.Clear();
+        Markers.Clear();
+        SelectionStart = -1;
+        SelectionEnd = -1;
+        PlaybackPosition = 0;
+        ViewStartMs = 0;
+        ViewEndMs = 60000;
+        TotalDurationMs = 0;
+        EditorTitle = "Editor";
+        StatusText = "Ready";
     }
 
     public void Dispose()
