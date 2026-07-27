@@ -63,7 +63,6 @@ public sealed class AppSettings
     public string ExportPath { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SamplerRecorder", "Exports");
     public long MaxBufferBytes { get; set; } = 2L * 1024 * 1024 * 1024; // 2 GB
-    public bool MinimizeToTray { get; set; } = true;
     public int Mp3BitRate { get; set; } = 192;
 
     // Recording mode options
