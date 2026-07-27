@@ -1,34 +1,45 @@
 using System.IO;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 
 namespace SamplerRecorder.Services;
 
 public enum RecordingState
 {
     Idle,
+    WaitingForSound,
     Recording,
     Paused
 }
 
 public sealed class AudioCaptureService : IDisposable
 {
-    private WasapiCapture? _micCapture;
     private WasapiLoopbackCapture? _loopbackCapture;
     private MemoryStream _buffer = new();
     private readonly object _bufferLock = new();
     private RecordingState _state = RecordingState.Idle;
-    private WaveFormat? _recordingFormat;
+    private WaveFormat? _recordingFormat; // always 16-bit PCM (post-conversion)
     private long _maxBufferBytes = 2L * 1024 * 1024 * 1024;
     private string? _tempFilePath;
     private FileStream? _tempFileStream;
     private bool _usingTempFile;
 
-    // For mixing two sources
-    private readonly List<byte> _micChunk = new();
-    private readonly List<byte> _loopbackChunk = new();
-    private readonly object _mixLock = new();
+    // Source format info (before conversion)
+    private bool _sourceIsFloat;
+    private int _sourceBitsPerSample;
+
+    // Silence detection / continuous mode
+    private System.Timers.Timer? _silenceTimer;
+    private DateTime _lastAudioTime = DateTime.MinValue;   // last time sound (above threshold) was detected
+    private DateTime _lastDataReceivedTime = DateTime.MinValue; // last time ANY data arrived from WASAPI
+    private DateTime _recordingStartTime;                  // when we entered Recording state
+    private bool _startOnSound;
+    private bool _stopOnSilence;
+    private bool _continuousMode; // inject silence when no audio (default true)
+    private double _silenceTimeoutMs;
+    private bool _isSkippingSilence; // true when we're in "skip silence" mode
+    private const float SilenceThreshold = 0.005f; // below this peak = silence
+    private const double ContinuousInjectionThresholdMs = 500; // only inject after 500ms of no WASAPI data
 
     public RecordingState State => _state;
     public WaveFormat? RecordingFormat => _recordingFormat;
@@ -39,20 +50,16 @@ public sealed class AudioCaptureService : IDisposable
     public event Action<float>? PeakAmplitudeChanged;
     public event Action? RecordingStopped;
     public event Action<byte[], int>? DataAvailable;
+    /// <summary>Fired when first sound is detected (for start-on-sound mode).</summary>
+    public event Action? SoundDetected;
+    /// <summary>Fired when silence-skip mode changes (true = skipping, false = resumed).</summary>
+    public event Action<bool>? SilenceSkipChanged;
 
-    public static List<string> GetMicDevices()
-    {
-        var devices = new List<string>();
-        for (int i = 0; i < WaveIn.DeviceCount; i++)
-        {
-            devices.Add(WaveIn.GetCapabilities(i).ProductName);
-        }
-        return devices;
-    }
+    public const string DefaultDeviceLabel = "(Default Device)";
 
     public static List<string> GetOutputDevices()
     {
-        var devices = new List<string>();
+        var devices = new List<string> { DefaultDeviceLabel };
         var enumerator = new MMDeviceEnumerator();
         var outputs = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
         foreach (var device in outputs)
@@ -64,7 +71,19 @@ public sealed class AudioCaptureService : IDisposable
 
     public void SetMaxBuffer(long bytes) => _maxBufferBytes = bytes;
 
-    public void StartRecording(string? micDevice, string? systemDevice, bool recordMic, bool recordSystem)
+    /// <summary>
+    /// Configure recording behavior before calling StartRecording.
+    /// </summary>
+    public void Configure(bool startOnSound, bool stopOnSilence, double silenceTimeoutSeconds)
+    {
+        _startOnSound = startOnSound;
+        _stopOnSilence = stopOnSilence;
+        _silenceTimeoutMs = silenceTimeoutSeconds * 1000.0;
+        // Continuous mode = NOT stop-on-silence (we fill silence to keep recording going)
+        _continuousMode = !stopOnSilence;
+    }
+
+    public void StartRecording(string? systemDevice)
     {
         if (_state != RecordingState.Idle) return;
 
@@ -73,64 +92,49 @@ public sealed class AudioCaptureService : IDisposable
         _usingTempFile = false;
         _tempFilePath = null;
         _tempFileStream = null;
+        _lastAudioTime = DateTime.MinValue;
+        _lastDataReceivedTime = DateTime.MinValue;
+        _recordingStartTime = DateTime.UtcNow;
+        _isSkippingSilence = false;
 
-        // Use 44100 stereo 16-bit as our canonical format
-        _recordingFormat = new WaveFormat(44100, 16, 2);
+        var sysMMDevice = (systemDevice == null || systemDevice == DefaultDeviceLabel)
+            ? null : FindDevice(systemDevice, DataFlow.Render);
 
-        if (recordMic && micDevice != null)
-        {
-            var micMMDevice = FindDevice(micDevice, DataFlow.Capture);
-            if (micMMDevice != null)
-            {
-                _micCapture = new WasapiCapture(micMMDevice);
-                _micCapture.WaveFormat = _recordingFormat;
-                _micCapture.DataAvailable += OnMicDataAvailable;
-                _micCapture.RecordingStopped += OnCaptureStopped;
-            }
-        }
+        _loopbackCapture = sysMMDevice != null
+            ? new WasapiLoopbackCapture(sysMMDevice)
+            : new WasapiLoopbackCapture();
 
-        if (recordSystem && systemDevice != null)
-        {
-            var sysMMDevice = FindDevice(systemDevice, DataFlow.Render);
-            if (sysMMDevice != null)
-            {
-                _loopbackCapture = new WasapiLoopbackCapture(sysMMDevice);
-                _loopbackCapture.WaveFormat = _recordingFormat;
-                _loopbackCapture.DataAvailable += OnLoopbackDataAvailable;
-                _loopbackCapture.RecordingStopped += OnCaptureStopped;
-            }
-        }
+        _loopbackCapture.DataAvailable += OnLoopbackDataAvailable;
+        _loopbackCapture.RecordingStopped += OnCaptureStopped;
 
-        // If neither device is available, fallback to default
-        if (_micCapture == null && _loopbackCapture == null)
-        {
-            if (recordMic)
-            {
-                _micCapture = new WasapiCapture();
-                _micCapture.WaveFormat = _recordingFormat;
-                _micCapture.DataAvailable += OnMicDataAvailable;
-                _micCapture.RecordingStopped += OnCaptureStopped;
-            }
-            else
-            {
-                _loopbackCapture = new WasapiLoopbackCapture();
-                _loopbackCapture.WaveFormat = _recordingFormat;
-                _loopbackCapture.DataAvailable += OnLoopbackDataAvailable;
-                _loopbackCapture.RecordingStopped += OnCaptureStopped;
-            }
-        }
+        // Read the native device format
+        var nativeFormat = _loopbackCapture.WaveFormat;
+        _sourceIsFloat = nativeFormat.Encoding == WaveFormatEncoding.IeeeFloat;
+        _sourceBitsPerSample = nativeFormat.BitsPerSample;
 
-        _micCapture?.StartRecording();
-        _loopbackCapture?.StartRecording();
-        _state = RecordingState.Recording;
+        // Our output format is always 16-bit PCM at the device's native sample rate/channels
+        _recordingFormat = new WaveFormat(nativeFormat.SampleRate, 16, nativeFormat.Channels);
+
+        _loopbackCapture.StartRecording();
+
+        // Set initial state based on start mode
+        _state = _startOnSound ? RecordingState.WaitingForSound : RecordingState.Recording;
+
+        // Start silence monitor timer (fires every 20ms)
+        _silenceTimer = new System.Timers.Timer(20);
+        _silenceTimer.Elapsed += OnSilenceTimerTick;
+        _silenceTimer.AutoReset = true;
+        _silenceTimer.Start();
+
+        FileLogger.Log($"Recording started. Native: {nativeFormat.SampleRate}Hz, {nativeFormat.Channels}ch, {nativeFormat.BitsPerSample}bit, {_sourceIsFloat}float. StartOnSound={_startOnSound}, StopOnSilence={_stopOnSilence}, Continuous={_continuousMode}");
     }
 
     public void Pause()
     {
         if (_state == RecordingState.Recording)
         {
-            _micCapture?.StopRecording();
             _loopbackCapture?.StopRecording();
+            _silenceTimer?.Stop();
             _state = RecordingState.Paused;
         }
     }
@@ -139,8 +143,9 @@ public sealed class AudioCaptureService : IDisposable
     {
         if (_state == RecordingState.Paused)
         {
-            _micCapture?.StartRecording();
             _loopbackCapture?.StartRecording();
+            _lastAudioTime = DateTime.UtcNow;
+            _silenceTimer?.Start();
             _state = RecordingState.Recording;
         }
     }
@@ -148,7 +153,9 @@ public sealed class AudioCaptureService : IDisposable
     public void Stop()
     {
         if (_state == RecordingState.Idle) return;
-        _micCapture?.StopRecording();
+        _silenceTimer?.Stop();
+        _silenceTimer?.Dispose();
+        _silenceTimer = null;
         _loopbackCapture?.StopRecording();
         _state = RecordingState.Idle;
         RecordingStopped?.Invoke();
@@ -204,74 +211,234 @@ public sealed class AudioCaptureService : IDisposable
     public void Dispose()
     {
         Stop();
-        _micCapture?.Dispose();
         _loopbackCapture?.Dispose();
         _tempFileStream?.Dispose();
         _buffer.Dispose();
     }
 
-    private void OnMicDataAvailable(object? sender, WaveInEventArgs e)
+    // --- Silence timer ---
+
+    private void OnSilenceTimerTick(object? sender, System.Timers.ElapsedEventArgs e)
     {
+        if (_state == RecordingState.WaitingForSound)
+        {
+            return;
+        }
+
         if (_state != RecordingState.Recording) return;
-        ProcessAudioData(e.Buffer, e.BytesRecorded);
+
+        var now = DateTime.UtcNow;
+
+        // For silence-skip: measure from last SOUND (or from recording start if no sound yet)
+        var soundReference = _lastAudioTime != DateTime.MinValue ? _lastAudioTime : _recordingStartTime;
+        double msSinceLastSound = (now - soundReference).TotalMilliseconds;
+
+        if (_stopOnSilence && !_isSkippingSilence && msSinceLastSound > _silenceTimeoutMs)
+        {
+            // Silence exceeded timeout — enter skip mode (stop writing to buffer)
+            _isSkippingSilence = true;
+            SilenceSkipChanged?.Invoke(true);
+            return;
+        }
+
+        // For continuous mode: only inject silence when WASAPI has completely stopped delivering
+        // (no data at all for >500ms). This avoids interfering with normal playback.
+        if (_continuousMode && _lastDataReceivedTime != DateTime.MinValue)
+        {
+            double msSinceLastData = (now - _lastDataReceivedTime).TotalMilliseconds;
+            if (msSinceLastData > ContinuousInjectionThresholdMs)
+            {
+                // WASAPI stopped delivering — inject silence to fill the gap
+                // Inject exactly the amount of time that passed since last data, minus threshold
+                int injectMs = (int)(msSinceLastData - ContinuousInjectionThresholdMs);
+                // Cap to avoid huge injections (e.g. after system sleep)
+                injectMs = Math.Min(injectMs, 100);
+                InjectSilence(injectMs);
+                // Update reference so we don't re-inject the same gap
+                _lastDataReceivedTime = now.AddMilliseconds(-(ContinuousInjectionThresholdMs));
+            }
+        }
+        else if (_continuousMode && _lastDataReceivedTime == DateTime.MinValue)
+        {
+            // No data has ever been received — inject silence from recording start
+            double msSinceStart = (now - _recordingStartTime).TotalMilliseconds;
+            if (msSinceStart > ContinuousInjectionThresholdMs)
+            {
+                int injectMs = Math.Min((int)(msSinceStart - ContinuousInjectionThresholdMs), 100);
+                InjectSilence(injectMs);
+                _lastDataReceivedTime = now.AddMilliseconds(-(ContinuousInjectionThresholdMs));
+            }
+        }
     }
+
+    private void InjectSilence(int durationMs)
+    {
+        if (_recordingFormat == null) return;
+        int bytes = _recordingFormat.AverageBytesPerSecond * durationMs / 1000;
+        // Align to frame boundary
+        int frameSize = _recordingFormat.Channels * 2;
+        bytes = (bytes / frameSize) * frameSize;
+        if (bytes <= 0) return;
+
+        var silence = new byte[bytes]; // zeroed = silence for 16-bit PCM
+        WriteToOutput(silence, bytes, isSilence: true);
+    }
+
+    // --- Data handler ---
 
     private void OnLoopbackDataAvailable(object? sender, WaveInEventArgs e)
     {
-        if (_state != RecordingState.Recording) return;
+        if (e.BytesRecorded == 0) return;
+        if (_state != RecordingState.Recording && _state != RecordingState.WaitingForSound) return;
 
-        // If we also have mic, we need to mix. For simplicity in MVP,
-        // if both sources active, we just write loopback (system audio is usually the priority).
-        // A proper mixer can be added later.
-        if (_micCapture != null)
+        // Track that WASAPI is delivering data (regardless of content)
+        _lastDataReceivedTime = DateTime.UtcNow;
+
+        byte[] pcm16;
+        int pcm16Len;
+
+        if (_sourceIsFloat)
         {
-            // Mix: just use system audio when both are active for now
-            // TODO: proper mixing in future version
-            ProcessAudioData(e.Buffer, e.BytesRecorded);
+            pcm16 = ConvertFloatTo16(e.Buffer, e.BytesRecorded);
+            pcm16Len = pcm16.Length;
+        }
+        else if (_sourceBitsPerSample == 16)
+        {
+            pcm16 = e.Buffer;
+            pcm16Len = e.BytesRecorded;
+        }
+        else if (_sourceBitsPerSample == 32)
+        {
+            pcm16 = Convert32IntTo16(e.Buffer, e.BytesRecorded);
+            pcm16Len = pcm16.Length;
         }
         else
         {
-            ProcessAudioData(e.Buffer, e.BytesRecorded);
+            return;
         }
+
+        // Check if this buffer contains actual sound
+        float peak = ComputePeak(pcm16, pcm16Len);
+        bool hasSound = peak > SilenceThreshold;
+
+        if (_state == RecordingState.WaitingForSound)
+        {
+            if (hasSound)
+            {
+                // First sound detected — transition to recording
+                _state = RecordingState.Recording;
+                _lastAudioTime = DateTime.UtcNow;
+                SoundDetected?.Invoke();
+                WriteToOutput(pcm16, pcm16Len);
+            }
+            // Otherwise discard — we're still waiting
+            return;
+        }
+
+        // If we're skipping silence, check if sound returned
+        if (_isSkippingSilence)
+        {
+            if (hasSound)
+            {
+                // Sound is back — resume capturing
+                _isSkippingSilence = false;
+                _lastAudioTime = DateTime.UtcNow;
+                SilenceSkipChanged?.Invoke(false);
+                WriteToOutput(pcm16, pcm16Len);
+            }
+            // Otherwise discard — still in silence gap
+            return;
+        }
+
+        // Normal recording
+        if (hasSound)
+        {
+            _lastAudioTime = DateTime.UtcNow;
+        }
+
+        WriteToOutput(pcm16, pcm16Len);
     }
 
-    private void ProcessAudioData(byte[] buffer, int bytesRecorded)
+    /// <summary>
+    /// Convert 32-bit IEEE float samples to 16-bit PCM.
+    /// </summary>
+    private static byte[] ConvertFloatTo16(byte[] floatBuffer, int bytesRecorded)
     {
-        if (bytesRecorded == 0) return;
+        int sampleCount = bytesRecorded / 4;
+        var output = new byte[sampleCount * 2];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float sample = BitConverter.ToSingle(floatBuffer, i * 4);
+            sample = Math.Clamp(sample, -1.0f, 1.0f);
+            short pcm = (short)(sample * 32767f);
+            output[i * 2] = (byte)(pcm & 0xFF);
+            output[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Convert 32-bit integer PCM to 16-bit by taking the upper 16 bits.
+    /// </summary>
+    private static byte[] Convert32IntTo16(byte[] buffer, int bytesRecorded)
+    {
+        int sampleCount = bytesRecorded / 4;
+        var output = new byte[sampleCount * 2];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            int sample = BitConverter.ToInt32(buffer, i * 4);
+            short pcm = (short)(sample >> 16);
+            output[i * 2] = (byte)(pcm & 0xFF);
+            output[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+        }
+
+        return output;
+    }
+
+    // --- Output writing ---
+
+    private void WriteToOutput(byte[] buffer, int count, bool isSilence = false)
+    {
+        if (count == 0) return;
 
         lock (_bufferLock)
         {
-            if (!_usingTempFile && RecordedBytes + bytesRecorded > _maxBufferBytes)
+            if (!_usingTempFile && RecordedBytes + count > _maxBufferBytes)
             {
-                // Switch to temp file
                 SwitchToTempFile();
             }
 
             if (_usingTempFile && _tempFileStream != null)
             {
-                _tempFileStream.Write(buffer, 0, bytesRecorded);
+                _tempFileStream.Write(buffer, 0, count);
             }
             else
             {
-                _buffer.Write(buffer, 0, bytesRecorded);
+                _buffer.Write(buffer, 0, count);
             }
         }
 
-        RecordedBytes += bytesRecorded;
+        RecordedBytes += count;
 
-        // Compute peak amplitude
-        float peak = ComputePeak(buffer, bytesRecorded);
-        PeakAmplitudeChanged?.Invoke(peak);
+        if (!isSilence)
+        {
+            float peak = ComputePeak(buffer, count);
+            PeakAmplitudeChanged?.Invoke(peak);
+        }
 
         // Notify waveform service
-        DataAvailable?.Invoke(buffer, bytesRecorded);
+        DataAvailable?.Invoke(buffer, count);
     }
+
+    // --- Helpers ---
 
     private void SwitchToTempFile()
     {
         _tempFilePath = Path.Combine(Path.GetTempPath(), $"SamplerRecorder_{Guid.NewGuid():N}.pcm");
         _tempFileStream = new FileStream(_tempFilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        // Flush existing buffer to file
         _tempFileStream.Write(_buffer.GetBuffer(), 0, (int)_buffer.Length);
         _buffer.Dispose();
         _buffer = new MemoryStream();

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
@@ -31,32 +32,46 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _settings = _settingsService.Load();
 
-        MicDevices = new ObservableCollection<string>(AudioCaptureService.GetMicDevices());
-        SystemDevices = new ObservableCollection<string>(AudioCaptureService.GetOutputDevices());
+        try
+        {
+            SystemDevices = new ObservableCollection<string>(AudioCaptureService.GetOutputDevices());
+        }
+        catch (Exception ex)
+        {
+            FileLogger.LogException("GetOutputDevices", ex);
+            SystemDevices = new ObservableCollection<string>();
+        }
+
         Clips = new ObservableCollection<ClipItemViewModel>();
         Markers = new ObservableCollection<Marker>();
 
-        SelectedMicDevice = _settings.SelectedMicDevice ?? (MicDevices.Count > 0 ? MicDevices[0] : null);
         SelectedSystemDevice = _settings.SelectedSystemDevice ?? (SystemDevices.Count > 0 ? SystemDevices[0] : null);
+        StartOnSound = _settings.StartOnSound;
+        StopOnSilence = _settings.StopOnSilence;
+        SilenceTimeoutSeconds = _settings.SilenceTimeoutSeconds;
 
         _captureService.PeakAmplitudeChanged += OnPeakAmplitude;
         _captureService.DataAvailable += OnDataAvailable;
         _captureService.RecordingStopped += OnRecordingStopped;
+        _captureService.SoundDetected += OnSoundDetected;
+        _captureService.SilenceSkipChanged += OnSilenceSkipChanged;
 
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _uiTimer.Tick += UiTimer_Tick;
 
         RegisterHotkeys();
+        RefreshSessionsList();
+        FileLogger.Log("MainViewModel initialized successfully.");
     }
 
     // --- Observable Properties ---
 
-    [ObservableProperty] private ObservableCollection<string> _micDevices;
     [ObservableProperty] private ObservableCollection<string> _systemDevices;
-    [ObservableProperty] private string? _selectedMicDevice;
     [ObservableProperty] private string? _selectedSystemDevice;
-    [ObservableProperty] private bool _recordMic = true;
-    [ObservableProperty] private bool _recordSystemAudio = true;
+
+    [ObservableProperty] private bool _startOnSound;
+    [ObservableProperty] private bool _stopOnSilence;
+    [ObservableProperty] private double _silenceTimeoutSeconds = 3.0;
 
     [ObservableProperty] private RecordingState _recordingState = RecordingState.Idle;
     [ObservableProperty] private float _currentPeak;
@@ -77,6 +92,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private long _selectionEnd = -1;
 
     [ObservableProperty] private string _statusText = "Ready";
+    [ObservableProperty] private string _editorTitle = "Editor";
+    [ObservableProperty] private ObservableCollection<SessionItemViewModel> _savedSessions = new();
+    [ObservableProperty] private ObservableCollection<ClipItemViewModel> _allClips = new();
+
+    public bool IsRecordingActive => RecordingState != RecordingState.Idle;
+    public bool CanStartRecording => RecordingState == RecordingState.Idle;
+    public bool CanPauseRecording => RecordingState != RecordingState.Idle;
+    public bool CanStopRecording => RecordingState != RecordingState.Idle;
+    public bool CanCreateMarker => RecordingState != RecordingState.Idle;
+
+    public string SelectionStartText => SelectionStart >= 0 ? FormatTimePrecise(SelectionStart) : "--:--.---";
+    public string SelectionEndText => SelectionEnd >= 0 ? FormatTimePrecise(SelectionEnd) : "--:--.---";
+    public string SelectionLengthText => SelectionStart >= 0 && SelectionEnd > SelectionStart
+        ? FormatTimePrecise(SelectionEnd - SelectionStart) : "0:00.000";
+
+    partial void OnRecordingStateChanged(RecordingState value)
+    {
+        OnPropertyChanged(nameof(IsRecordingActive));
+        OnPropertyChanged(nameof(CanStartRecording));
+        OnPropertyChanged(nameof(CanPauseRecording));
+        OnPropertyChanged(nameof(CanStopRecording));
+        OnPropertyChanged(nameof(CanCreateMarker));
+    }
+    partial void OnSelectionStartChanged(long value) { OnPropertyChanged(nameof(SelectionStartText)); OnPropertyChanged(nameof(SelectionLengthText)); }
+    partial void OnSelectionEndChanged(long value) { OnPropertyChanged(nameof(SelectionEndText)); OnPropertyChanged(nameof(SelectionLengthText)); }
 
     public WaveformDataService WaveformService => _waveformService;
     public AppSettings Settings => _settings;
@@ -90,24 +130,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _currentSession = new RecordingSession
         {
-            MicDeviceName = RecordMic ? SelectedMicDevice : null,
-            SystemDeviceName = RecordSystemAudio ? SelectedSystemDevice : null
+            SystemDeviceName = SelectedSystemDevice
         };
 
-        _waveformService.Reset(44100, 2);
         Markers.Clear();
         Clips.Clear();
         SelectionStart = -1;
         SelectionEnd = -1;
 
         _captureService.SetMaxBuffer(_settings.MaxBufferBytes);
-        _captureService.StartRecording(SelectedMicDevice, SelectedSystemDevice, RecordMic, RecordSystemAudio);
+        _captureService.Configure(StartOnSound, StopOnSilence, SilenceTimeoutSeconds);
+        _captureService.StartRecording(SelectedSystemDevice);
 
-        RecordingState = RecordingState.Recording;
+        // Use the actual device format for waveform processing
+        var fmt = _captureService.RecordingFormat;
+        _waveformService.Reset(fmt?.SampleRate ?? 48000, fmt?.Channels ?? 2);
+
+        if (StartOnSound)
+        {
+            RecordingState = RecordingState.WaitingForSound;
+            StatusText = "Waiting for sound...";
+            // Don't start UI timer yet — it starts when sound is detected
+        }
+        else
+        {
+            RecordingState = RecordingState.Recording;
+            StatusText = "● Recording...";
+            _uiTimer.Start();
+        }
+
         ViewStartMs = 0;
         ViewEndMs = 10000;
-        StatusText = "Recording...";
-        _uiTimer.Start();
     }
 
     [RelayCommand]
@@ -135,19 +188,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _captureService.Stop();
         _uiTimer.Stop();
         RecordingState = RecordingState.Idle;
-        StatusText = "Recording stopped. Processing waveform...";
+        ElapsedTime = "00:00";
+        StatusText = "Recording stopped. Saving...";
 
         // Finalize
         if (_currentSession != null)
         {
             _currentSession.DurationMs = _waveformService.TotalDurationMs;
             _currentSession.Markers = Markers.ToList();
+            _currentSession.Clips = Clips.Select(c => c.Clip).ToList();
             TotalDurationMs = _currentSession.DurationMs;
             ViewEndMs = TotalDurationMs;
             ViewStartMs = 0;
+
+            // Auto-save to disk
+            var pcmData = _captureService.GetRecordedData();
+            var format = _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
+            _sessionStore.SaveSession(_currentSession, pcmData, format);
+            _playbackFormat = format;
+            _loadedPcmData = pcmData;
+
+            RefreshSessionsList();
         }
 
-        StatusText = $"Recording complete. Duration: {FormatTime(TotalDurationMs)}";
+        StatusText = $"Recording saved. Duration: {FormatTime(TotalDurationMs)}";
     }
 
     [RelayCommand]
@@ -205,8 +269,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         clipVm ??= SelectedClip;
         if (clipVm == null) return;
 
-        var pcmData = _captureService.GetRecordedData();
-        var format = _captureService.RecordingFormat ?? _playbackFormat ?? new WaveFormat(44100, 16, 2);
+        var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
+        var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
 
         var fileName = AudioExportService.GetSafeFileName(clipVm.Name) + ".mp3";
         var outputPath = Path.Combine(_settings.ExportPath, fileName);
@@ -251,11 +315,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var pcmData = _captureService.GetRecordedData();
+        // Use loaded PCM data (from saved session) or live recording buffer
+        var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
         if (pcmData.Length == 0) return;
 
-        var format = _captureService.RecordingFormat ?? new WaveFormat(44100, 16, 2);
-        _playbackFormat = format;
+        var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
 
         // Apply speed by adjusting sample rate
         var playFormat = new WaveFormat((int)(format.SampleRate * PlaybackSpeed), format.BitsPerSample, format.Channels);
@@ -317,9 +381,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void SetPlaybackSpeed(double speed)
+    private void SetPlaybackSpeed(string speed)
     {
-        PlaybackSpeed = speed;
+        if (double.TryParse(speed, System.Globalization.CultureInfo.InvariantCulture, out var val))
+            PlaybackSpeed = val;
     }
 
     // --- Event Handlers ---
@@ -337,6 +402,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void OnRecordingStopped()
     {
         // Handled in StopRecording command
+    }
+
+    private void OnSoundDetected()
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (RecordingState == RecordingState.WaitingForSound)
+            {
+                RecordingState = RecordingState.Recording;
+                StatusText = "● Recording...";
+                _uiTimer.Start();
+            }
+        });
+    }
+
+    private void OnSilenceSkipChanged(bool isSkipping)
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (RecordingState != RecordingState.Recording) return;
+            StatusText = isSkipping ? "⏸ Skipping silence..." : "● Recording...";
+        });
     }
 
     private void UiTimer_Tick(object? sender, EventArgs e)
@@ -382,10 +469,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void SaveSettings()
     {
-        _settings.SelectedMicDevice = SelectedMicDevice;
         _settings.SelectedSystemDevice = SelectedSystemDevice;
-        _settings.RecordMic = RecordMic;
-        _settings.RecordSystemAudio = RecordSystemAudio;
+        _settings.StartOnSound = StartOnSound;
+        _settings.StopOnSilence = StopOnSilence;
+        _settings.SilenceTimeoutSeconds = SilenceTimeoutSeconds;
         _settingsService.Save(_settings);
     }
 
@@ -395,6 +482,113 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return ts.TotalHours >= 1
             ? $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}"
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+    }
+
+    private static string FormatTimePrecise(long ms)
+    {
+        var ts = TimeSpan.FromMilliseconds(ms);
+        return $"{(int)ts.TotalMinutes}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+    }
+
+    // --- New commands for editor ---
+
+    [RelayCommand]
+    private void NudgeStart(string deltaStr)
+    {
+        if (SelectionStart < 0) return;
+        if (long.TryParse(deltaStr, out var delta))
+        {
+            SelectionStart = Math.Max(0, SelectionStart + delta);
+            if (SelectionStart >= SelectionEnd && SelectionEnd > 0)
+                SelectionStart = SelectionEnd - 50;
+        }
+    }
+
+    [RelayCommand]
+    private void NudgeEnd(string deltaStr)
+    {
+        if (SelectionEnd < 0) return;
+        if (long.TryParse(deltaStr, out var delta))
+        {
+            SelectionEnd = Math.Min(TotalDurationMs, SelectionEnd + delta);
+            if (SelectionEnd <= SelectionStart && SelectionStart >= 0)
+                SelectionEnd = SelectionStart + 50;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenSession(SessionItemViewModel? sessionVm)
+    {
+        if (sessionVm == null) return;
+
+        var session = sessionVm.Session;
+        EditorTitle = $"Recording - {session.CreatedAt:yyyy-MM-dd HH:mm}";
+
+        // Load PCM data and build waveform
+        var pcmData = _sessionStore.LoadPcmData(session, out var format);
+        if (pcmData != null && format != null)
+        {
+            _playbackFormat = format;
+            _waveformService.BuildFromPcm(pcmData, format.SampleRate, format.Channels);
+            TotalDurationMs = _waveformService.TotalDurationMs;
+            ViewStartMs = 0;
+            ViewEndMs = TotalDurationMs;
+
+            // Store PCM for playback/export
+            _loadedPcmData = pcmData;
+        }
+
+        // Load markers and clips
+        Markers.Clear();
+        foreach (var m in session.Markers) Markers.Add(m);
+
+        Clips.Clear();
+        foreach (var c in session.Clips)
+        {
+            var vm = new ClipItemViewModel(c);
+            vm.Initialize();
+            Clips.Add(vm);
+        }
+
+        _currentSession = session;
+        SelectionStart = -1;
+        SelectionEnd = -1;
+        StatusText = $"Loaded: {FormatTime(TotalDurationMs)}";
+    }
+
+    private byte[]? _loadedPcmData;
+
+    [RelayCommand]
+    private void OpenRecordingsFolder()
+    {
+        var dir = SettingsService.GetSessionsDir();
+        Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+    }
+
+    [RelayCommand]
+    private void OpenClipsFolder()
+    {
+        var dir = _settings.ExportPath;
+        Directory.CreateDirectory(dir);
+        Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+    }
+
+    public void RefreshSessionsList()
+    {
+        SavedSessions.Clear();
+        AllClips.Clear();
+
+        var sessions = _sessionStore.GetAllSessions();
+        foreach (var (dir, session) in sessions)
+        {
+            SavedSessions.Add(new SessionItemViewModel(session));
+            foreach (var clip in session.Clips)
+            {
+                var clipVm = new ClipItemViewModel(clip);
+                clipVm.Initialize();
+                AllClips.Add(clipVm);
+            }
+        }
     }
 
     public void Dispose()

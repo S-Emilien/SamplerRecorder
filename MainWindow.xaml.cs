@@ -1,8 +1,10 @@
-﻿using System.Windows;
+﻿using System.Drawing;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using SamplerRecorder.Controls;
 using SamplerRecorder.Models;
+using SamplerRecorder.Services;
 using SamplerRecorder.ViewModels;
 
 namespace SamplerRecorder;
@@ -11,6 +13,7 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
     private bool _isMinimizedToTray;
+    private H.NotifyIcon.TaskbarIcon? _trayIcon;
 
     public MainWindow()
     {
@@ -42,19 +45,52 @@ public partial class MainWindow : Window
         // Redraw waveform periodically
         var redrawTimer = new System.Windows.Threading.DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(100)
+            Interval = TimeSpan.FromMilliseconds(80)
         };
         redrawTimer.Tick += (_, _) =>
         {
-            WaveformDisplay.PlaybackPositionMs = _vm.PlaybackPosition;
-            WaveformDisplay.ViewStartMs = _vm.ViewStartMs;
-            WaveformDisplay.ViewEndMs = _vm.ViewEndMs;
-            WaveformDisplay.SelectionStartMs = _vm.SelectionStart;
-            WaveformDisplay.SelectionEndMs = _vm.SelectionEnd;
-            WaveformDisplay.Markers = new List<Marker>(_vm.Markers);
-            WaveformDisplay.Redraw();
+            if (EditorScreen.Visibility == Visibility.Visible)
+            {
+                WaveformDisplay.PlaybackPositionMs = _vm.PlaybackPosition;
+                WaveformDisplay.ViewStartMs = _vm.ViewStartMs;
+                WaveformDisplay.ViewEndMs = _vm.ViewEndMs;
+                WaveformDisplay.SelectionStartMs = _vm.SelectionStart;
+                WaveformDisplay.SelectionEndMs = _vm.SelectionEnd;
+                WaveformDisplay.Markers = new List<Marker>(_vm.Markers);
+                WaveformDisplay.Redraw();
+            }
         };
         redrawTimer.Start();
+
+        // Show tray icon on startup
+        ShowTrayIcon();
+    }
+
+    private void RecordingsList_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (RecordingsList.SelectedItem is SessionItemViewModel session)
+        {
+            _vm.OpenSessionCommand.Execute(session);
+            SwitchToEditor();
+        }
+    }
+
+    private void BackToHome_Click(object sender, RoutedEventArgs e)
+    {
+        SwitchToHome();
+    }
+
+    private void SwitchToEditor()
+    {
+        HomeScreen.Visibility = Visibility.Collapsed;
+        EditorScreen.Visibility = Visibility.Visible;
+    }
+
+    private void SwitchToHome()
+    {
+        EditorScreen.Visibility = Visibility.Collapsed;
+        HomeScreen.Visibility = Visibility.Visible;
+        _vm.RefreshSessionsList();
     }
 
     private void Marker_Click(object sender, MouseButtonEventArgs e)
@@ -71,8 +107,6 @@ public partial class MainWindow : Window
         {
             Hide();
             _isMinimizedToTray = true;
-            // Show tray notification
-            ShowTrayIcon();
         }
     }
 
@@ -81,6 +115,7 @@ public partial class MainWindow : Window
         if (!_isMinimizedToTray)
         {
             _vm.Dispose();
+            _trayIcon?.Dispose();
         }
         else
         {
@@ -89,33 +124,53 @@ public partial class MainWindow : Window
         }
     }
 
-    private H.NotifyIcon.TaskbarIcon? _trayIcon;
-
     private void ShowTrayIcon()
     {
         if (_trayIcon != null) return;
 
-        _trayIcon = new H.NotifyIcon.TaskbarIcon
+        try
         {
-            ToolTipText = "SamplerRecorder - Recording",
-            Icon = System.Drawing.SystemIcons.Application
-        };
+            _trayIcon = new H.NotifyIcon.TaskbarIcon
+            {
+                ToolTipText = "SamplerRecorder",
+                Visibility = Visibility.Visible
+            };
+            _trayIcon.Icon = CreateTrayIcon();
 
-        var contextMenu = new ContextMenu();
-        var showItem = new MenuItem { Header = "Show" };
-        showItem.Click += (_, _) => RestoreFromTray();
-        var exitItem = new MenuItem { Header = "Exit" };
-        exitItem.Click += (_, _) =>
+            var contextMenu = new ContextMenu();
+            var showItem = new MenuItem { Header = "Show" };
+            showItem.Click += (_, _) => RestoreFromTray();
+            var exitItem = new MenuItem { Header = "Exit" };
+            exitItem.Click += (_, _) =>
+            {
+                _vm.Dispose();
+                _trayIcon?.Dispose();
+                Application.Current.Shutdown();
+            };
+            contextMenu.Items.Add(showItem);
+            contextMenu.Items.Add(exitItem);
+            _trayIcon.ContextMenu = contextMenu;
+
+            _trayIcon.TrayLeftMouseDown += (_, _) => RestoreFromTray();
+            FileLogger.Log("Tray icon created.");
+        }
+        catch (Exception ex)
         {
-            _vm.Dispose();
-            _trayIcon?.Dispose();
-            Application.Current.Shutdown();
-        };
-        contextMenu.Items.Add(showItem);
-        contextMenu.Items.Add(exitItem);
-        _trayIcon.ContextMenu = contextMenu;
+            FileLogger.LogException("ShowTrayIcon", ex);
+        }
+    }
 
-        _trayIcon.TrayLeftMouseDown += (_, _) => RestoreFromTray();
+    private static System.Drawing.Icon CreateTrayIcon()
+    {
+        using var bmp = new Bitmap(16, 16);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(System.Drawing.Color.Transparent);
+            using var brush = new SolidBrush(System.Drawing.Color.FromArgb(255, 80, 180, 255));
+            g.FillEllipse(brush, 1, 1, 14, 14);
+        }
+        var handle = bmp.GetHicon();
+        return System.Drawing.Icon.FromHandle(handle);
     }
 
     private void RestoreFromTray()
@@ -124,7 +179,5 @@ public partial class MainWindow : Window
         Show();
         WindowState = WindowState.Normal;
         Activate();
-        _trayIcon?.Dispose();
-        _trayIcon = null;
     }
 }

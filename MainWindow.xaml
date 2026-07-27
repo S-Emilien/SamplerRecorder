@@ -5,217 +5,387 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:SamplerRecorder.Controls"
         xmlns:vm="clr-namespace:SamplerRecorder.ViewModels"
+        xmlns:conv="clr-namespace:SamplerRecorder.Converters"
         mc:Ignorable="d"
-        Title="SamplerRecorder" Height="700" Width="1100"
+        Title="SamplerRecorder" Height="720" Width="1150"
         MinHeight="500" MinWidth="800"
         WindowStartupLocation="CenterScreen"
         StateChanged="Window_StateChanged"
         Closing="Window_Closing">
 
+    <Window.Resources>
+        <conv:PeakToWidthConverter x:Key="PeakToWidth"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+        <!-- ==================== HOME SCREEN ==================== -->
+        <Grid x:Name="HomeScreen" Visibility="Visible">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-        <!-- Top Toolbar: Recording Controls -->
-        <Border Grid.Row="0" Background="{StaticResource BgMediumBrush}" Padding="10,8"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <DockPanel>
-                <!-- Left: App title -->
-                <TextBlock DockPanel.Dock="Left" Text="SamplerRecorder" FontWeight="Bold"
-                           FontSize="15" VerticalAlignment="Center" Margin="0,0,20,0"
-                           Foreground="{StaticResource AccentBrush}"/>
-
-                <!-- Right: Status -->
-                <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}"
-                           Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"
-                           Margin="10,0,0,0" FontSize="11"/>
-
-                <!-- Center: Recording controls -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <!-- Source selection -->
-                    <CheckBox Content="Mic" IsChecked="{Binding RecordMic}" Margin="0,0,6,0"
-                              VerticalAlignment="Center"/>
-                    <ComboBox ItemsSource="{Binding MicDevices}" SelectedItem="{Binding SelectedMicDevice}"
-                              Width="140" Margin="0,0,12,0" IsEnabled="{Binding RecordMic}"/>
-
-                    <CheckBox Content="System" IsChecked="{Binding RecordSystemAudio}" Margin="0,0,6,0"
-                              VerticalAlignment="Center"/>
-                    <ComboBox ItemsSource="{Binding SystemDevices}" SelectedItem="{Binding SelectedSystemDevice}"
-                              Width="140" Margin="0,0,16,0" IsEnabled="{Binding RecordSystemAudio}"/>
-
-                    <Separator Margin="4,0,12,0"/>
-
-                    <!-- Record buttons -->
-                    <Button Content="&#x23FA; Record" Command="{Binding StartRecordingCommand}"
-                            Style="{StaticResource AccentButton}" Margin="0,0,6,0"
-                            ToolTip="Ctrl+Shift+R"/>
-                    <Button Content="&#x23F8; Pause" Command="{Binding PauseRecordingCommand}"
-                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+P"/>
-                    <Button Content="&#x23F9; Stop" Command="{Binding StopRecordingCommand}"
-                            Style="{StaticResource DangerButton}" Margin="0,0,6,0"
-                            ToolTip="Ctrl+Shift+S"/>
-                    <Button Content="&#x2691; Marker" Command="{Binding CreateMarkerCommand}"
-                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+M"/>
-                    <Button Content="&#x1F4BE; Save" Command="{Binding SaveSessionCommand}"
-                            Margin="0,0,6,0"/>
-                </StackPanel>
-            </DockPanel>
-        </Border>
-
-        <!-- Second row: Playback + Timer -->
-        <Border Grid.Row="1" Background="{StaticResource BgMediumBrush}" Padding="10,5"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <DockPanel>
-                <!-- Timer -->
-                <TextBlock DockPanel.Dock="Left" Text="{Binding ElapsedTime}" FontSize="18"
-                           FontWeight="Bold" FontFamily="Consolas" VerticalAlignment="Center"
-                           Foreground="{StaticResource SuccessBrush}" Margin="0,0,16,0"/>
-
-                <!-- Peak meter -->
-                <Grid DockPanel.Dock="Left" Width="100" Height="12" Margin="0,0,16,0"
-                      VerticalAlignment="Center">
-                    <Border Background="{StaticResource BgLightBrush}" CornerRadius="3"/>
-                    <Border Background="{StaticResource AccentBrush}" CornerRadius="3"
-                            HorizontalAlignment="Left">
-                        <Border.Width>
-                            <MultiBinding StringFormat="{}{0}">
-                                <Binding Path="CurrentPeak"/>
-                            </MultiBinding>
-                        </Border.Width>
-                    </Border>
-                </Grid>
-
-                <!-- Right: Playback speed -->
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                    <TextBlock Text="Speed:" VerticalAlignment="Center" Margin="0,0,6,0"
-                               Foreground="{StaticResource TextDimBrush}"/>
-                    <Button Content="1x" Command="{Binding SetPlaybackSpeedCommand}"
-                            CommandParameter="1.0" Padding="6,3" Margin="0,0,3,0"/>
-                    <Button Content="1.5x" Command="{Binding SetPlaybackSpeedCommand}"
-                            CommandParameter="1.5" Padding="6,3" Margin="0,0,3,0"/>
-                    <Button Content="2x" Command="{Binding SetPlaybackSpeedCommand}"
-                            CommandParameter="2.0" Padding="6,3"/>
-                </StackPanel>
-
-                <!-- Center: Playback controls -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <Button Content="&#x23EE;" Command="{Binding PreviousMarkerCommand}"
-                            Padding="8,4" Margin="0,0,4,0" ToolTip="Previous Marker"/>
-                    <Button Content="&#x25B6; Play" Command="{Binding PlayCommand}"
-                            Padding="10,4" Margin="0,0,4,0"/>
-                    <Button Content="&#x23F9;" Command="{Binding StopPlaybackCommand}"
-                            Padding="8,4" Margin="0,0,4,0"/>
-                    <Button Content="&#x23ED;" Command="{Binding NextMarkerCommand}"
-                            Padding="8,4" ToolTip="Next Marker"/>
-                </StackPanel>
-            </DockPanel>
-        </Border>
-
-        <!-- Center: Waveform -->
-        <Border Grid.Row="2" Margin="6" CornerRadius="4" ClipToBounds="True"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
-            <controls:WaveformControl x:Name="WaveformDisplay"/>
-        </Border>
-
-        <!-- Bottom: Clips + Markers -->
-        <Grid Grid.Row="3" Margin="6,0,6,6">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="300"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Clip List -->
-            <Border Grid.Column="0" Background="{StaticResource BgMediumBrush}" CornerRadius="4"
-                    Padding="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+            <!-- Top Bar -->
+            <Border Grid.Row="0" Background="{StaticResource BgMediumBrush}" Padding="12,10"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                 <DockPanel>
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="Clips" FontWeight="SemiBold" FontSize="13"
-                                   VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Button Content="+ Create Clip" Command="{Binding CreateClipCommand}"
-                                Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
-                        <Button Content="Export" Command="{Binding ExportClipCommand}"
-                                Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
-                        <Button Content="Export All" Command="{Binding ExportAllClipsCommand}"
-                                Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
-                        <Button Content="Delete" Command="{Binding DeleteClipCommand}"
-                                Padding="8,3" FontSize="11"/>
+                    <TextBlock DockPanel.Dock="Left" Text="SamplerRecorder" FontWeight="Bold"
+                               FontSize="16" VerticalAlignment="Center"
+                               Foreground="{StaticResource AccentBrush}"/>
+
+                    <!-- Recording indicator -->
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="16,0,0,0"
+                                Visibility="{Binding IsRecordingActive, Converter={StaticResource BoolToVis}}">
+                        <Ellipse Width="10" Height="10" Fill="{StaticResource DangerBrush}" Margin="0,0,6,0"/>
+                        <TextBlock Text="RECORDING" Foreground="{StaticResource DangerBrush}"
+                                   FontWeight="Bold" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ElapsedTime}" Foreground="{StaticResource DangerBrush}"
+                                   FontFamily="Consolas" FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0"/>
                     </StackPanel>
 
-                    <ListBox ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}"
-                             BorderThickness="0" Background="Transparent" MaxHeight="130">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate DataType="{x:Type vm:ClipItemViewModel}">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}"
-                                               Foreground="{StaticResource TextDimBrush}"
-                                               FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                             Background="Transparent" BorderThickness="0"
-                                             Foreground="{StaticResource TextBrush}" FontSize="12"
-                                             VerticalContentAlignment="Center"/>
-                                </DockPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}"
+                               Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"
+                               FontSize="11" HorizontalAlignment="Right"/>
                 </DockPanel>
             </Border>
 
-            <!-- Spacer -->
-            <GridSplitter Grid.Column="1" Width="6" Background="Transparent"
-                          HorizontalAlignment="Center" VerticalAlignment="Stretch"/>
+            <!-- Recording Controls Bar -->
+            <Border Grid.Row="1" Background="{StaticResource BgMediumBrush}" Padding="12,8"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock Text="Output:" VerticalAlignment="Center" Margin="0,0,6,0"
+                               Foreground="{StaticResource TextDimBrush}"/>
+                    <ComboBox ItemsSource="{Binding SystemDevices}" SelectedItem="{Binding SelectedSystemDevice}"
+                              Width="200" Margin="0,0,20,0"/>
 
-            <!-- Marker List -->
-            <Border Grid.Column="2" Background="{StaticResource BgMediumBrush}" CornerRadius="4"
-                    Padding="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Markers" FontWeight="SemiBold"
-                               FontSize="13" Margin="0,0,0,6"/>
-                    <ListBox ItemsSource="{Binding Markers}" BorderThickness="0"
-                             Background="Transparent" MaxHeight="130">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right"
-                                               Foreground="{StaticResource WarningBrush}"
-                                               FontSize="11" FontFamily="Consolas"
-                                               VerticalAlignment="Center">
-                                        <Run Text="{Binding TimestampMs, StringFormat={}{0}ms, Mode=OneWay}"/>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding Name}" FontSize="12"
-                                               VerticalAlignment="Center"/>
-                                </DockPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="6,3"/>
-                                <EventSetter Event="MouseLeftButtonUp" Handler="Marker_Click"/>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                    </ListBox>
-                </DockPanel>
+                    <Separator Margin="4,0,16,0"/>
+
+                    <Button Content="&#x23FA; Record" Command="{Binding StartRecordingCommand}"
+                            Style="{StaticResource AccentButton}" Margin="0,0,6,0" ToolTip="Ctrl+Shift+R"
+                            IsEnabled="{Binding CanStartRecording}"/>
+                    <Button Content="&#x23F8; Pause" Command="{Binding PauseRecordingCommand}"
+                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+P"
+                            IsEnabled="{Binding CanPauseRecording}"/>
+                    <Button Content="&#x23F9; Stop" Command="{Binding StopRecordingCommand}"
+                            Style="{StaticResource DangerButton}" Margin="0,0,6,0" ToolTip="Ctrl+Shift+S"
+                            IsEnabled="{Binding CanStopRecording}"/>
+                    <Button Content="&#x2691; Marker" Command="{Binding CreateMarkerCommand}"
+                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+M"
+                            IsEnabled="{Binding CanCreateMarker}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Recording Options -->
+            <Border Grid.Row="2" Background="{StaticResource BgMediumBrush}" Padding="12,5"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <CheckBox Content="Start on sound" IsChecked="{Binding StartOnSound}"
+                              VerticalAlignment="Center" Margin="0,0,20,0"
+                              IsEnabled="{Binding CanStartRecording}"/>
+
+                    <CheckBox Content="Skip silence after" IsChecked="{Binding StopOnSilence}"
+                              VerticalAlignment="Center" Margin="0,0,6,0"
+                              IsEnabled="{Binding CanStartRecording}"/>
+                    <TextBox Text="{Binding SilenceTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                             Width="40" VerticalAlignment="Center" TextAlignment="Center"
+                             IsEnabled="{Binding StopOnSilence}"/>
+                    <TextBlock Text="sec" VerticalAlignment="Center" Margin="4,0,0,0"
+                               Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Main Content: Recordings + Clips -->
+            <Grid Grid.Row="3" Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Recordings List -->
+                <Border Grid.Column="0" Background="{StaticResource BgMediumBrush}" CornerRadius="6"
+                        Padding="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <TextBlock Text="Recordings" FontWeight="SemiBold" FontSize="14"
+                                       VerticalAlignment="Center"/>
+                            <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenRecordingsFolderCommand}"
+                                    HorizontalAlignment="Right" Padding="8,3" FontSize="11"/>
+                        </DockPanel>
+                        <ListBox x:Name="RecordingsList" ItemsSource="{Binding SavedSessions}"
+                                 BorderThickness="0" Background="Transparent"
+                                 MouseDoubleClick="RecordingsList_DoubleClick">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="2,4">
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   Text="{Binding DurationText}"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   FontSize="11" VerticalAlignment="Center"/>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontSize="13"/>
+                                            <TextBlock Text="{Binding DateText}" FontSize="10"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+
+                <!-- All Clips List -->
+                <Border Grid.Column="2" Background="{StaticResource BgMediumBrush}" CornerRadius="6"
+                        Padding="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="All Clips" FontWeight="SemiBold" FontSize="14"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <Button Content="Export All" Command="{Binding ExportAllClipsCommand}"
+                                        Padding="8,3" FontSize="11"/>
+                            </StackPanel>
+                            <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenClipsFolderCommand}"
+                                    HorizontalAlignment="Right" Padding="8,3" FontSize="11"/>
+                        </DockPanel>
+                        <ListBox ItemsSource="{Binding AllClips}" BorderThickness="0"
+                                 Background="Transparent">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel Margin="2,3">
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontSize="12"/>
+                                            <TextBlock Text="{Binding SourceRecordingName}" FontSize="10"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- Status Bar -->
+            <Border Grid.Row="4" Background="{StaticResource BgMediumBrush}" Padding="10,5"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                <TextBlock Text="Double-click a recording to open the editor | Hotkeys work globally"
+                           Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
             </Border>
         </Grid>
 
-        <!-- Status Bar -->
-        <Border Grid.Row="4" Background="{StaticResource BgMediumBrush}" Padding="8,4"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-            <DockPanel>
-                <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource TextDimBrush}" FontSize="11">
-                    <Run Text="Selection: "/>
-                    <Run Text="{Binding SelectionStart, Mode=OneWay, StringFormat={}{0}ms}"/>
-                    <Run Text=" - "/>
-                    <Run Text="{Binding SelectionEnd, Mode=OneWay, StringFormat={}{0}ms}"/>
-                </TextBlock>
-                <TextBlock Text="Shift+Drag to select region | Scroll to zoom | Drag to pan | Click to seek"
+        <!-- ==================== EDITOR SCREEN ==================== -->
+        <Grid x:Name="EditorScreen" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Editor Top Bar -->
+            <Border Grid.Row="0" Background="{StaticResource BgMediumBrush}" Padding="10,8"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <DockPanel>
+                    <Button DockPanel.Dock="Left" Content="&#x2190; Back" Click="BackToHome_Click"
+                            Padding="10,5" Margin="0,0,16,0"/>
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding EditorTitle}" FontWeight="SemiBold"
+                               FontSize="14" VerticalAlignment="Center"/>
+
+                    <!-- Recording indicator in editor -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                Visibility="{Binding IsRecordingActive, Converter={StaticResource BoolToVis}}">
+                        <Ellipse Width="10" Height="10" Fill="{StaticResource DangerBrush}" Margin="0,0,6,0"/>
+                        <TextBlock Text="REC" Foreground="{StaticResource DangerBrush}"
+                                   FontWeight="Bold" FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ElapsedTime}" Foreground="{StaticResource DangerBrush}"
+                                   FontFamily="Consolas" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}"
+                               Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"
+                               Margin="0,0,16,0" FontSize="11"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Playback + Timer Bar -->
+            <Border Grid.Row="1" Background="{StaticResource BgMediumBrush}" Padding="10,5"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding ElapsedTime}" FontSize="18"
+                               FontWeight="Bold" FontFamily="Consolas" VerticalAlignment="Center"
+                               Foreground="{StaticResource SuccessBrush}" Margin="0,0,16,0"/>
+
+                    <!-- Peak meter -->
+                    <Grid DockPanel.Dock="Left" Width="80" Height="10" Margin="0,0,16,0"
+                          VerticalAlignment="Center">
+                        <Border Background="{StaticResource BgLightBrush}" CornerRadius="3"/>
+                        <Border Background="{StaticResource AccentBrush}" CornerRadius="3"
+                                HorizontalAlignment="Left"
+                                Width="{Binding CurrentPeak, Converter={StaticResource PeakToWidth}, ConverterParameter=80}"/>
+                    </Grid>
+
+                    <!-- Speed -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <TextBlock Text="Speed:" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
+                        <Button Content="1x" Command="{Binding SetPlaybackSpeedCommand}"
+                                CommandParameter="1.0" Padding="6,2" Margin="0,0,3,0" FontSize="11"/>
+                        <Button Content="1.5x" Command="{Binding SetPlaybackSpeedCommand}"
+                                CommandParameter="1.5" Padding="6,2" Margin="0,0,3,0" FontSize="11"/>
+                        <Button Content="2x" Command="{Binding SetPlaybackSpeedCommand}"
+                                CommandParameter="2.0" Padding="6,2" FontSize="11"/>
+                    </StackPanel>
+
+                    <!-- Playback controls -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button Content="&#x23EE;" Command="{Binding PreviousMarkerCommand}"
+                                Padding="8,4" Margin="0,0,4,0" ToolTip="Previous Marker"/>
+                        <Button Content="&#x25B6; Play" Command="{Binding PlayCommand}"
+                                Padding="10,4" Margin="0,0,4,0"/>
+                        <Button Content="&#x23F9;" Command="{Binding StopPlaybackCommand}"
+                                Padding="8,4" Margin="0,0,4,0"/>
+                        <Button Content="&#x23ED;" Command="{Binding NextMarkerCommand}"
+                                Padding="8,4" ToolTip="Next Marker"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- Waveform -->
+            <Border Grid.Row="2" Margin="8,6" CornerRadius="4" ClipToBounds="True"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                <controls:WaveformControl x:Name="WaveformDisplay"/>
+            </Border>
+
+            <!-- Selection Info + Nudge Controls -->
+            <Border Grid.Row="3" Background="{StaticResource BgMediumBrush}" Padding="10,6" Margin="8,0"
+                    CornerRadius="4" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                <DockPanel>
+                    <!-- Selection times -->
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                        <TextBlock Text="In: " Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SelectionStartText}" FontFamily="Consolas" FontSize="13"
+                                   Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                        <TextBlock Text="Out: " Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SelectionEndText}" FontFamily="Consolas" FontSize="13"
+                                   Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                        <TextBlock Text="Len: " Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SelectionLengthText}" FontFamily="Consolas" FontSize="13"
+                                   Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Nudge buttons -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <TextBlock Text="Nudge:" Foreground="{StaticResource TextDimBrush}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="11"/>
+                        <Button Content="-500ms" Command="{Binding NudgeStartCommand}" CommandParameter="-500"
+                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
+                        <Button Content="-100ms" Command="{Binding NudgeStartCommand}" CommandParameter="-100"
+                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
+                        <Button Content="-50ms" Command="{Binding NudgeStartCommand}" CommandParameter="-50"
+                                Padding="5,2" Margin="0,0,8,0" FontSize="10"/>
+                        <Button Content="+50ms" Command="{Binding NudgeEndCommand}" CommandParameter="50"
+                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
+                        <Button Content="+100ms" Command="{Binding NudgeEndCommand}" CommandParameter="100"
+                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
+                        <Button Content="+500ms" Command="{Binding NudgeEndCommand}" CommandParameter="500"
+                                Padding="5,2" FontSize="10"/>
+                    </StackPanel>
+
+                    <!-- Center: Create clip -->
+                    <Button Content="+ Create Clip from Selection" Command="{Binding CreateClipCommand}"
+                            Style="{StaticResource AccentButton}" HorizontalAlignment="Center" Padding="12,4"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Clips + Markers -->
+            <Grid Grid.Row="4" Margin="8,6,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="280"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Clip List -->
+                <Border Grid.Column="0" Background="{StaticResource BgMediumBrush}" CornerRadius="4"
+                        Padding="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="Clips" FontWeight="SemiBold" FontSize="13"
+                                       VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Content="Export" Command="{Binding ExportClipCommand}"
+                                    Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
+                            <Button Content="Export All" Command="{Binding ExportAllClipsCommand}"
+                                    Padding="8,3" Margin="0,0,6,0" FontSize="11"/>
+                            <Button Content="Delete" Command="{Binding DeleteClipCommand}"
+                                    Padding="8,3" FontSize="11"/>
+                        </StackPanel>
+                        <ListBox ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}"
+                                 BorderThickness="0" Background="Transparent" MaxHeight="120">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:ClipItemViewModel}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding DurationText}"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                 Background="Transparent" BorderThickness="0"
+                                                 Foreground="{StaticResource TextBrush}" FontSize="12"
+                                                 VerticalContentAlignment="Center"/>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+
+                <!-- Marker List -->
+                <Border Grid.Column="2" Background="{StaticResource BgMediumBrush}" CornerRadius="4"
+                        Padding="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Text="Markers" FontWeight="SemiBold"
+                                   FontSize="13" Margin="0,0,0,6"/>
+                        <ListBox ItemsSource="{Binding Markers}" BorderThickness="0"
+                                 Background="Transparent" MaxHeight="120">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   Foreground="{StaticResource WarningBrush}"
+                                                   FontSize="11" FontFamily="Consolas"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding TimestampMs, StringFormat={}{0}ms}"/>
+                                        <TextBlock Text="{Binding Name}" FontSize="12"
+                                                   VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="6,3"/>
+                                    <EventSetter Event="MouseLeftButtonUp" Handler="Marker_Click"/>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- Editor Status Bar -->
+            <Border Grid.Row="5" Background="{StaticResource BgMediumBrush}" Padding="8,4"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                <TextBlock Text="Drag to select region | Drag edges to resize | Scroll to zoom | Right-drag to pan | Click to seek"
                            Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
-            </DockPanel>
-        </Border>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

@@ -44,3 +44,4 @@ E:\Users\ServietSky\source\repos\SamplerRecorder\obj\Debug\net8.0-windows\refint
 E:\Users\ServietSky\source\repos\SamplerRecorder\obj\Debug\net8.0-windows\SamplerRecorder.pdb
 E:\Users\ServietSky\source\repos\SamplerRecorder\obj\Debug\net8.0-windows\SamplerRecorder.genruntimeconfig.cache
 E:\Users\ServietSky\source\repos\SamplerRecorder\obj\Debug\net8.0-windows\ref\SamplerRecorder.dll
+E:\Users\ServietSky\source\repos\SamplerRecorder\obj\Debug\net8.0-windows\SamplerRecorder.sourcelink.json

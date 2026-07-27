@@ -32,6 +32,11 @@ public sealed class AppSettings
     public bool MinimizeToTray { get; set; } = true;
     public int Mp3BitRate { get; set; } = 192;
 
+    // Recording mode options
+    public bool StartOnSound { get; set; } = false;
+    public bool StopOnSilence { get; set; } = false;
+    public double SilenceTimeoutSeconds { get; set; } = 3.0;
+
     public HotkeyBinding StartRecordingHotkey { get; set; } = new() { Key = Key.R, Modifiers = ModifierKeys.Control | ModifierKeys.Shift };
     public HotkeyBinding PauseRecordingHotkey { get; set; } = new() { Key = Key.P, Modifiers = ModifierKeys.Control | ModifierKeys.Shift };
     public HotkeyBinding StopRecordingHotkey { get; set; } = new() { Key = Key.S, Modifiers = ModifierKeys.Control | ModifierKeys.Shift };
