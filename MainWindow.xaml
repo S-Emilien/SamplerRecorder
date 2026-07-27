@@ -198,8 +198,14 @@
             <!-- Status Bar -->
             <Border Grid.Row="4" Background="{StaticResource BgMediumBrush}" Padding="10,5"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-                <TextBlock Text="Double-click a recording to open the editor | Hotkeys work globally"
-                           Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding AppCopyright, Mode=OneTime}"
+                               Foreground="{StaticResource TextDimBrush}" FontSize="10"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text="Double-click a recording to open the editor | Hotkeys work globally"
+                               Foreground="{StaticResource TextDimBrush}" FontSize="11"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
             </Border>
         </Grid>
 

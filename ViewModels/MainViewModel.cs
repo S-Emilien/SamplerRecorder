@@ -30,6 +30,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private int _playbackSessionId; // guards against stale PlaybackStopped events
     private long _playClipEndMs = -1; // when >= 0, playback auto-pauses at this boundary
 
+    // --- Recording isolation: keeps active recording separate from editor viewing ---
+    private RecordingSession? _recordingSession;       // the session being actively recorded
+    private readonly List<Marker> _recordingMarkers = new();  // markers for the active recording
+    private readonly List<AudioClip> _recordingClips = new(); // clips for the active recording
+    private bool _viewingSeparateSession;              // true when viewing a loaded session while recording continues
+
     public MainViewModel()
     {
         _settings = _settingsService.Load();
@@ -137,6 +143,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public WaveformDataService WaveformService => _waveformService;
     public AppSettings Settings => _settings;
+    public static string AppCopyright => AppInfo.Copyright;
 
     // --- Commands ---
 
@@ -145,10 +152,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (RecordingState != RecordingState.Idle) return;
 
-        _currentSession = new RecordingSession
+        _recordingSession = new RecordingSession
         {
             SystemDeviceName = SelectedSystemDevice
         };
+        _recordingMarkers.Clear();
+        _recordingClips.Clear();
+        _viewingSeparateSession = false;
+
+        _currentSession = _recordingSession;
 
         Markers.Clear();
         Clips.Clear();
@@ -203,32 +215,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (RecordingState == RecordingState.Idle) return;
 
         _captureService.Stop();
-        _uiTimer.Stop();
         RecordingState = RecordingState.Idle;
         ElapsedTime = "00:00";
         StatusText = "Recording stopped. Saving...";
 
-        // Finalize
-        if (_currentSession != null)
+        // Finalize the recording session (always use _recordingSession, not _currentSession)
+        if (_recordingSession != null)
         {
-            _currentSession.DurationMs = _waveformService.TotalDurationMs;
-            _currentSession.Markers = Markers.ToList();
-            _currentSession.Clips = Clips.Select(c => c.Clip).ToList();
-            TotalDurationMs = _currentSession.DurationMs;
-            ViewEndMs = TotalDurationMs;
-            ViewStartMs = 0;
-
-            // Auto-save to disk
             var pcmData = _captureService.GetRecordedData();
             var format = _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
-            _sessionStore.SaveSession(_currentSession, pcmData, format);
-            _playbackFormat = format;
-            _loadedPcmData = pcmData;
+
+            // Compute duration from actual recorded data
+            long durationMs = (long)(pcmData.Length / (double)format.AverageBytesPerSecond * 1000);
+            _recordingSession.DurationMs = durationMs;
+            _recordingSession.Markers = _recordingMarkers.ToList();
+            _recordingSession.Clips = _recordingClips.ToList();
+
+            // Auto-save to disk
+            _sessionStore.SaveSession(_recordingSession, pcmData, format);
+
+            // If we were NOT viewing a separate session, update editor state to show the saved recording
+            if (!_viewingSeparateSession)
+            {
+                _currentSession = _recordingSession;
+                _playbackFormat = format;
+                _loadedPcmData = pcmData;
+                TotalDurationMs = durationMs;
+                ViewEndMs = TotalDurationMs;
+                ViewStartMs = 0;
+            }
+
+            _recordingSession = null;
+            _recordingMarkers.Clear();
+            _recordingClips.Clear();
+            _viewingSeparateSession = false;
 
             RefreshSessionsList();
+            StatusText = $"Recording saved. Duration: {FormatTimeFull(durationMs)}";
+        }
+        else
+        {
+            _viewingSeparateSession = false;
+            StatusText = "Recording stopped.";
         }
 
-        StatusText = $"Recording saved. Duration: {FormatTimeFull(TotalDurationMs)}";
+        // Stop the UI timer only if playback is not active
+        if (!_isPlaying)
+            _uiTimer.Stop();
     }
 
     [RelayCommand]
@@ -239,9 +272,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var marker = new Marker
         {
             TimestampMs = _captureService.RecordedMs,
-            Name = $"Marker {Markers.Count + 1}"
+            Name = $"Marker {_recordingMarkers.Count + 1}"
         };
-        Markers.Add(marker);
+        _recordingMarkers.Add(marker);
+
+        // Only show in UI if not viewing a separate session
+        if (!_viewingSeparateSession)
+            Markers.Add(marker);
+
         StatusText = $"Marker added at {FormatTime(marker.TimestampMs)}";
     }
 
@@ -276,7 +314,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         vm.Initialize();
         Clips.Add(vm);
 
-        _currentSession?.Clips.Add(clip);
+        // Add to recording clips if recording is active, otherwise to the viewed session
+        if (_recordingSession != null && !_viewingSeparateSession)
+            _recordingClips.Add(clip);
+        else
+            _currentSession?.Clips.Add(clip);
+
         StatusText = $"Clip created: {FormatTime(clip.StartMs)} - {FormatTime(clip.EndMs)}";
     }
 
@@ -495,7 +538,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnDataAvailable(byte[] buffer, int bytesRecorded)
     {
-        _waveformService.AppendData(buffer, bytesRecorded);
+        // Only append to waveform when NOT viewing a separate loaded session
+        if (!_viewingSeparateSession)
+            _waveformService.AppendData(buffer, bytesRecorded);
     }
 
     private void OnRecordingStopped()
@@ -521,6 +566,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (RecordingState != RecordingState.Recording) return;
+            if (_viewingSeparateSession) return; // don't disturb editor status
             StatusText = isSkipping ? "⏸ Skipping silence..." : "● Recording...";
         });
     }
@@ -531,14 +577,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var ms = _captureService.RecordedMs;
             ElapsedTime = FormatTime(ms);
-            TotalDurationMs = ms;
 
-            // Auto-scroll view during recording
-            if (ms > ViewEndMs - 1000)
+            // Only update duration/view when NOT viewing a separate loaded session
+            if (!_viewingSeparateSession)
             {
-                var viewWidth = ViewEndMs - ViewStartMs;
-                ViewEndMs = ms + 2000;
-                ViewStartMs = ViewEndMs - viewWidth;
+                TotalDurationMs = ms;
+
+                // Auto-scroll view during recording
+                if (ms > ViewEndMs - 1000)
+                {
+                    var viewWidth = ViewEndMs - ViewStartMs;
+                    ViewEndMs = ms + 2000;
+                    ViewStartMs = ViewEndMs - viewWidth;
+                }
             }
         }
 
@@ -643,6 +694,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var session = sessionVm.Session;
         EditorTitle = $"Recording - {session.CreatedAt:yyyy-MM-dd HH:mm}";
 
+        // If recording is active, mark that we're now viewing a separate session
+        if (RecordingState != RecordingState.Idle)
+            _viewingSeparateSession = true;
+
+        // Stop any current editor playback before loading new session
+        StopPlayback();
+
         // Load PCM data and build waveform
         var pcmData = _sessionStore.LoadPcmData(session, out var format);
         if (pcmData != null && format != null)
@@ -657,7 +715,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _loadedPcmData = pcmData;
         }
 
-        // Load markers and clips
+        // Load markers and clips for the VIEWED session
         Markers.Clear();
         foreach (var m in session.Markers) Markers.Add(m);
 
@@ -880,16 +938,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _loadedPcmData = null;
         _currentSession = null;
         _playbackFormat = null;
+
+        // If recording is still active and we were viewing a separate session,
+        // restore waveform tracking for the active recording
+        if (_viewingSeparateSession && RecordingState != RecordingState.Idle)
+        {
+            var fmt = _captureService.RecordingFormat;
+            _waveformService.Reset(fmt?.SampleRate ?? 48000, fmt?.Channels ?? 2);
+            _currentSession = _recordingSession;
+            TotalDurationMs = _captureService.RecordedMs;
+            ViewStartMs = 0;
+            ViewEndMs = Math.Max(TotalDurationMs + 2000, 10000);
+        }
+
+        _viewingSeparateSession = false;
         Clips.Clear();
         Markers.Clear();
         SelectionStart = -1;
         SelectionEnd = -1;
         PlaybackPosition = 0;
-        ViewStartMs = 0;
-        ViewEndMs = 60000;
-        TotalDurationMs = 0;
+
+        if (RecordingState == RecordingState.Idle)
+        {
+            ViewStartMs = 0;
+            ViewEndMs = 60000;
+            TotalDurationMs = 0;
+        }
+
         EditorTitle = "Editor";
-        StatusText = "Ready";
+
+        // Reflect the actual recording state in the status text
+        if (RecordingState == RecordingState.Recording)
+            StatusText = "● Recording...";
+        else if (RecordingState == RecordingState.Paused)
+            StatusText = "Paused";
+        else if (RecordingState == RecordingState.WaitingForSound)
+            StatusText = "Waiting for sound...";
+        else
+            StatusText = "Ready";
     }
 
     public void Dispose()
