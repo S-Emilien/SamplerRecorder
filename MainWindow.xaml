@@ -9,6 +9,7 @@
         mc:Ignorable="d"
         Title="SamplerRecorder" Height="720" Width="1150"
         MinHeight="500" MinWidth="800"
+        Icon="Resources/app.ico"
         WindowStartupLocation="CenterScreen"
         StateChanged="Window_StateChanged"
         Closing="Window_Closing">
@@ -65,16 +66,16 @@
                     <Separator Margin="4,0,16,0"/>
 
                     <Button Content="&#x23FA; Record" Command="{Binding StartRecordingCommand}"
-                            Style="{StaticResource AccentButton}" Margin="0,0,6,0" ToolTip="Ctrl+Shift+R"
+                            Style="{StaticResource AccentButton}" Margin="0,0,6,0"
                             IsEnabled="{Binding CanStartRecording}"/>
                     <Button Content="&#x23F8; Pause" Command="{Binding PauseRecordingCommand}"
-                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+P"
+                            Margin="0,0,6,0"
                             IsEnabled="{Binding CanPauseRecording}"/>
                     <Button Content="&#x23F9; Stop" Command="{Binding StopRecordingCommand}"
-                            Style="{StaticResource DangerButton}" Margin="0,0,6,0" ToolTip="Ctrl+Shift+S"
+                            Style="{StaticResource DangerButton}" Margin="0,0,6,0"
                             IsEnabled="{Binding CanStopRecording}"/>
                     <Button Content="&#x2691; Marker" Command="{Binding CreateMarkerCommand}"
-                            Margin="0,0,6,0" ToolTip="Ctrl+Shift+M"
+                            Margin="0,0,6,0"
                             IsEnabled="{Binding CanCreateMarker}"/>
                 </StackPanel>
             </Border>
@@ -199,6 +200,11 @@
             <Border Grid.Row="4" Background="{StaticResource BgMediumBrush}" Padding="10,5"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
                 <DockPanel>
+                    <Button DockPanel.Dock="Right" Click="SettingsButton_Click"
+                            ToolTip="Hotkey Settings" Cursor="Hand" VerticalAlignment="Center"
+                            Background="Transparent" BorderThickness="0" Padding="4,1"
+                            FontSize="11" Foreground="{StaticResource TextDimBrush}"
+                            Content="&#x2699;" Margin="10,0,0,0"/>
                     <TextBlock DockPanel.Dock="Right" Text="{Binding AppCopyright, Mode=OneTime}"
                                Foreground="{StaticResource TextDimBrush}" FontSize="10"
                                VerticalAlignment="Center"/>
@@ -419,6 +425,53 @@
                 <TextBlock Text="Left-click: seek | Left-drag: pan | Right-drag: select region | Drag edges to resize | Scroll to zoom"
                            Foreground="{StaticResource TextDimBrush}" FontSize="11"/>
             </Border>
+        </Grid>
+
+        <!-- ==================== SETTINGS SCREEN ==================== -->
+        <Grid x:Name="SettingsScreen" Visibility="Collapsed" Background="{StaticResource BgDarkBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Settings Top Bar -->
+            <Border Grid.Row="0" Background="{StaticResource BgMediumBrush}" Padding="10,8"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                <DockPanel>
+                    <Button DockPanel.Dock="Left" Content="&#x2190; Back" Click="BackToHome_FromSettings_Click"
+                            Padding="10,5" Margin="0,0,16,0"/>
+                    <TextBlock DockPanel.Dock="Left" Text="Settings" FontWeight="SemiBold"
+                               FontSize="14" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Settings Content -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,20">
+                <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+                    <TextBlock Text="Global Hotkeys" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,6"/>
+                    <TextBlock Text="Click Assign and press the desired key combination or mouse button. Hotkeys work globally, even when the app is not focused."
+                               Foreground="{StaticResource TextDimBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,20"/>
+
+                    <!-- Hotkey rows -->
+                    <controls:HotkeyCaptureControl x:Name="HotkeyStart" ActionName="Start Recording"
+                                                   BindingDisplay="{Binding StartRecordingHotkeyText, Mode=OneWay}"
+                                                   Margin="0,0,0,10"/>
+                    <controls:HotkeyCaptureControl x:Name="HotkeyPause" ActionName="Pause Recording"
+                                                   BindingDisplay="{Binding PauseRecordingHotkeyText, Mode=OneWay}"
+                                                   Margin="0,0,0,10"/>
+                    <controls:HotkeyCaptureControl x:Name="HotkeyStop" ActionName="Stop Recording"
+                                                   BindingDisplay="{Binding StopRecordingHotkeyText, Mode=OneWay}"
+                                                   Margin="0,0,0,10"/>
+                    <controls:HotkeyCaptureControl x:Name="HotkeyMarker" ActionName="Create Marker"
+                                                   BindingDisplay="{Binding CreateMarkerHotkeyText, Mode=OneWay}"
+                                                   Margin="0,0,0,10"/>
+
+                    <!-- Validation error -->
+                    <TextBlock Text="{Binding HotkeyValidationError}" Foreground="{StaticResource DangerBrush}"
+                               FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding HasHotkeyValidationError, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
     </Grid>
 </Window>

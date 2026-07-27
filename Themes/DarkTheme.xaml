@@ -251,6 +251,11 @@
         </Setter>
     </Style>
 
+    <!-- ScrollViewer -->
+    <Style TargetType="ScrollViewer">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
     <!-- ScrollBar minimal -->
     <Style TargetType="ScrollBar">
         <Setter Property="Width" Value="8"/>

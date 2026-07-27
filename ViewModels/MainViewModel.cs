@@ -103,6 +103,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private ObservableCollection<SessionItemViewModel> _savedSessions = new();
     [ObservableProperty] private ObservableCollection<AllClipsItemViewModel> _allClips = new();
 
+    // --- Hotkey settings ---
+    [ObservableProperty] private string _hotkeyValidationError = string.Empty;
+
+    public bool HasHotkeyValidationError => !string.IsNullOrEmpty(HotkeyValidationError);
+
+    partial void OnHotkeyValidationErrorChanged(string value) => OnPropertyChanged(nameof(HasHotkeyValidationError));
+
     // --- Clip file playback (independent from editor playback) ---
     private IWavePlayer? _clipPlayer;
     private WaveStream? _clipStream;
@@ -144,6 +151,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public WaveformDataService WaveformService => _waveformService;
     public AppSettings Settings => _settings;
     public static string AppCopyright => AppInfo.Copyright;
+
+    // Hotkey display properties for settings UI
+    public string StartRecordingHotkeyText => _settings.StartRecordingHotkey.ToString();
+    public string PauseRecordingHotkeyText => _settings.PauseRecordingHotkey.ToString();
+    public string StopRecordingHotkeyText => _settings.StopRecordingHotkey.ToString();
+    public string CreateMarkerHotkeyText => _settings.CreateMarkerHotkey.ToString();
 
     // --- Commands ---
 
@@ -624,11 +637,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RegisterHotkeys()
     {
-        _hotkeyService.RegisterHotkeys(_settings,
+        var failures = _hotkeyService.RegisterHotkeys(_settings,
             () => Application.Current?.Dispatcher.Invoke(StartRecording),
             () => Application.Current?.Dispatcher.Invoke(PauseRecording),
             () => Application.Current?.Dispatcher.Invoke(StopRecording),
             () => Application.Current?.Dispatcher.Invoke(CreateMarker));
+
+        if (failures.Count > 0)
+        {
+            StatusText = $"Warning: Could not register hotkey(s): {string.Join(", ", failures)} (already in use)";
+        }
     }
 
     public void SaveSettings()
@@ -638,6 +656,95 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.StopOnSilence = StopOnSilence;
         _settings.SilenceTimeoutSeconds = SilenceTimeoutSeconds;
         _settingsService.Save(_settings);
+    }
+
+    // --- Settings / Hotkey Configuration ---
+
+    [RelayCommand]
+    private void OpenSettings()
+    {
+        HotkeyValidationError = string.Empty;
+    }
+
+    [RelayCommand]
+    private void CloseSettings()
+    {
+        SaveSettings();
+        RegisterHotkeys();
+    }
+
+    /// <summary>
+    /// Assigns a hotkey to an action after validation. Returns true if successful.
+    /// </summary>
+    public bool SetHotkey(string action, HotkeyBinding binding)
+    {
+        // Validate: not unassigned
+        if (binding.IsUnassigned)
+        {
+            HotkeyValidationError = "Please press a key combination or mouse button.";
+            return false;
+        }
+
+        // Validate: conflict detection
+        var allBindings = new (string Name, HotkeyBinding Binding)[]
+        {
+            ("Start Recording", _settings.StartRecordingHotkey),
+            ("Pause Recording", _settings.PauseRecordingHotkey),
+            ("Stop Recording", _settings.StopRecordingHotkey),
+            ("Create Marker", _settings.CreateMarkerHotkey)
+        };
+
+        foreach (var (name, existing) in allBindings)
+        {
+            if (name != action && !existing.IsUnassigned && existing.Matches(binding))
+            {
+                HotkeyValidationError = $"This shortcut is already assigned to \"{name}\".";
+                return false;
+            }
+        }
+
+        // Assign
+        switch (action)
+        {
+            case "Start Recording": _settings.StartRecordingHotkey = binding; break;
+            case "Pause Recording": _settings.PauseRecordingHotkey = binding; break;
+            case "Stop Recording": _settings.StopRecordingHotkey = binding; break;
+            case "Create Marker": _settings.CreateMarkerHotkey = binding; break;
+        }
+
+        HotkeyValidationError = string.Empty;
+        OnPropertyChanged(nameof(StartRecordingHotkeyText));
+        OnPropertyChanged(nameof(PauseRecordingHotkeyText));
+        OnPropertyChanged(nameof(StopRecordingHotkeyText));
+        OnPropertyChanged(nameof(CreateMarkerHotkeyText));
+
+        // Re-register immediately
+        SaveSettings();
+        RegisterHotkeys();
+        return true;
+    }
+
+    /// <summary>
+    /// Clears the hotkey for an action.
+    /// </summary>
+    public void ClearHotkey(string action)
+    {
+        switch (action)
+        {
+            case "Start Recording": _settings.StartRecordingHotkey = new HotkeyBinding(); break;
+            case "Pause Recording": _settings.PauseRecordingHotkey = new HotkeyBinding(); break;
+            case "Stop Recording": _settings.StopRecordingHotkey = new HotkeyBinding(); break;
+            case "Create Marker": _settings.CreateMarkerHotkey = new HotkeyBinding(); break;
+        }
+
+        HotkeyValidationError = string.Empty;
+        OnPropertyChanged(nameof(StartRecordingHotkeyText));
+        OnPropertyChanged(nameof(PauseRecordingHotkeyText));
+        OnPropertyChanged(nameof(StopRecordingHotkeyText));
+        OnPropertyChanged(nameof(CreateMarkerHotkeyText));
+
+        SaveSettings();
+        RegisterHotkeys();
     }
 
     private static string FormatTime(long ms)
@@ -981,7 +1088,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         _uiTimer.Stop();
-        _hotkeyService.UnregisterAll();
+        _hotkeyService.Dispose();
         StopClipPlaybackInternal();
         _wavePlayer?.Dispose();
         _playbackStream?.Dispose();

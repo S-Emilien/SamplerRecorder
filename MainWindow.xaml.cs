@@ -1,4 +1,5 @@
 ﻿using System.Drawing;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -70,6 +71,18 @@ public partial class MainWindow : Window
 
         // Show tray icon on startup
         ShowTrayIcon();
+
+        // Wire up hotkey capture controls
+        WireHotkeyControl(HotkeyStart);
+        WireHotkeyControl(HotkeyPause);
+        WireHotkeyControl(HotkeyStop);
+        WireHotkeyControl(HotkeyMarker);
+    }
+
+    private void WireHotkeyControl(SamplerRecorder.Controls.HotkeyCaptureControl control)
+    {
+        control.HotkeyCaptured += (action, binding) => _vm.SetHotkey(action, binding);
+        control.HotkeyCleared += action => _vm.ClearHotkey(action);
     }
 
     private void RecordingsList_DoubleClick(object sender, MouseButtonEventArgs e)
@@ -96,8 +109,24 @@ public partial class MainWindow : Window
     {
         _vm.ResetEditorState();
         EditorScreen.Visibility = Visibility.Collapsed;
+        SettingsScreen.Visibility = Visibility.Collapsed;
         HomeScreen.Visibility = Visibility.Visible;
         _vm.RefreshSessionsList();
+    }
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.OpenSettingsCommand.Execute(null);
+        HomeScreen.Visibility = Visibility.Collapsed;
+        EditorScreen.Visibility = Visibility.Collapsed;
+        SettingsScreen.Visibility = Visibility.Visible;
+    }
+
+    private void BackToHome_FromSettings_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.CloseSettingsCommand.Execute(null);
+        SettingsScreen.Visibility = Visibility.Collapsed;
+        HomeScreen.Visibility = Visibility.Visible;
     }
 
     private void Marker_Click(object sender, MouseButtonEventArgs e)
@@ -142,7 +171,7 @@ public partial class MainWindow : Window
                 ToolTipText = "SamplerRecorder",
                 Visibility = Visibility.Visible
             };
-            _trayIcon.Icon = CreateTrayIcon();
+            _trayIcon.Icon = LoadAppIcon();
 
             var contextMenu = new ContextMenu();
             var showItem = new MenuItem { Header = "Show" };
@@ -167,8 +196,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private static System.Drawing.Icon CreateTrayIcon()
+    private static System.Drawing.Icon LoadAppIcon()
     {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/Resources/app.ico", UriKind.Absolute);
+            var streamInfo = System.Windows.Application.GetResourceStream(uri);
+            if (streamInfo != null)
+            {
+                using var stream = streamInfo.Stream;
+                return new System.Drawing.Icon(stream, 16, 16);
+            }
+        }
+        catch { /* fall through to fallback */ }
+
+        // Fallback: simple colored circle if icon resource is missing
         using var bmp = new Bitmap(16, 16);
         using (var g = Graphics.FromImage(bmp))
         {
@@ -176,8 +218,7 @@ public partial class MainWindow : Window
             using var brush = new SolidBrush(System.Drawing.Color.FromArgb(255, 80, 180, 255));
             g.FillEllipse(brush, 1, 1, 14, 14);
         }
-        var handle = bmp.GetHicon();
-        return System.Drawing.Icon.FromHandle(handle);
+        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
     }
 
     private void RestoreFromTray()
