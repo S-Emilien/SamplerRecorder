@@ -113,8 +113,13 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                             <TextBlock Text="Recordings" FontWeight="SemiBold" FontSize="14"
                                        VerticalAlignment="Center"/>
-                            <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenRecordingsFolderCommand}"
-                                    HorizontalAlignment="Right" Padding="8,3" FontSize="11"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="&#x21BB;" Command="{Binding RefreshRecordingsCommand}"
+                                        Padding="0" Width="22" Height="22" FontSize="12"
+                                        ToolTip="Refresh" VerticalAlignment="Center"/>
+                                <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenRecordingsFolderCommand}"
+                                        Padding="8,3" FontSize="11" Margin="6,0,0,0"/>
+                            </StackPanel>
                         </DockPanel>
                         <ListBox x:Name="RecordingsList" ItemsSource="{Binding SavedSessions}"
                                  BorderThickness="0" Background="Transparent"
@@ -158,8 +163,13 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                             <TextBlock Text="All Clips" FontWeight="SemiBold" FontSize="14"
                                        VerticalAlignment="Center"/>
-                            <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenClipsFolderCommand}"
-                                    HorizontalAlignment="Right" Padding="8,3" FontSize="11"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="&#x21BB;" Command="{Binding RefreshClipsCommand}"
+                                        Padding="0" Width="22" Height="22" FontSize="12"
+                                        ToolTip="Refresh" VerticalAlignment="Center"/>
+                                <Button Content="&#x1F4C2; Open Folder" Command="{Binding OpenClipsFolderCommand}"
+                                        Padding="8,3" FontSize="11" Margin="6,0,0,0"/>
+                            </StackPanel>
                         </DockPanel>
                         <ListBox ItemsSource="{Binding AllClips}" BorderThickness="0"
                                  Background="Transparent">

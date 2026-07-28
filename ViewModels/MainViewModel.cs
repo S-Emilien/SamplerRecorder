@@ -180,9 +180,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SelectionStart = -1;
         SelectionEnd = -1;
 
-        _captureService.SetMaxBuffer(_settings.MaxBufferBytes);
         _captureService.Configure(StartOnSound, StopOnSilence, SilenceTimeoutSeconds);
-        _captureService.StartRecording(SelectedSystemDevice);
+        _captureService.StartRecording(SelectedSystemDevice, _settings.Mp3BitRate);
 
         // Use the actual device format for waveform processing
         var fmt = _captureService.RecordingFormat;
@@ -855,6 +854,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var dir = _settings.ExportPath;
         Directory.CreateDirectory(dir);
         Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+    }
+
+    [RelayCommand]
+    private void RefreshRecordings()
+    {
+        SavedSessions.Clear();
+        var sessions = _sessionStore.GetAllSessions();
+        foreach (var (dir, session) in sessions)
+        {
+            SavedSessions.Add(new SessionItemViewModel(session));
+        }
+    }
+
+    [RelayCommand]
+    private void RefreshClips()
+    {
+        RefreshAllClipsFromFolder();
     }
 
     [RelayCommand]

@@ -1,5 +1,6 @@
 using System.IO;
 using NAudio.CoreAudioApi;
+using NAudio.Lame;
 using NAudio.Wave;
 
 namespace SamplerRecorder.Services;
@@ -15,14 +16,15 @@ public enum RecordingState
 public sealed class AudioCaptureService : IDisposable
 {
     private WasapiLoopbackCapture? _loopbackCapture;
-    private MemoryStream _buffer = new();
     private readonly object _bufferLock = new();
     private RecordingState _state = RecordingState.Idle;
     private WaveFormat? _recordingFormat; // always 16-bit PCM (post-conversion)
-    private long _maxBufferBytes = 2L * 1024 * 1024 * 1024;
-    private string? _tempFilePath;
-    private FileStream? _tempFileStream;
-    private bool _usingTempFile;
+    private string? _mp3TempPath;
+    private LameMP3FileWriter? _mp3Writer;
+    private int _mp3BitRate = 192;
+
+    // Resampler (used when device sample rate exceeds LAME's 48 kHz limit)
+    private FloatResampler? _resampler;
 
     // Source format info (before conversion)
     private bool _sourceIsFloat;
@@ -69,8 +71,6 @@ public sealed class AudioCaptureService : IDisposable
         return devices;
     }
 
-    public void SetMaxBuffer(long bytes) => _maxBufferBytes = bytes;
-
     /// <summary>
     /// Configure recording behavior before calling StartRecording.
     /// </summary>
@@ -83,15 +83,12 @@ public sealed class AudioCaptureService : IDisposable
         _continuousMode = !stopOnSilence;
     }
 
-    public void StartRecording(string? systemDevice)
+    public void StartRecording(string? systemDevice, int mp3BitRate = 192)
     {
         if (_state != RecordingState.Idle) return;
 
-        _buffer = new MemoryStream();
         RecordedBytes = 0;
-        _usingTempFile = false;
-        _tempFilePath = null;
-        _tempFileStream = null;
+        _mp3BitRate = mp3BitRate;
         _lastAudioTime = DateTime.MinValue;
         _lastDataReceivedTime = DateTime.MinValue;
         _recordingStartTime = DateTime.UtcNow;
@@ -112,8 +109,24 @@ public sealed class AudioCaptureService : IDisposable
         _sourceIsFloat = nativeFormat.Encoding == WaveFormatEncoding.IeeeFloat;
         _sourceBitsPerSample = nativeFormat.BitsPerSample;
 
-        // Our output format is always 16-bit PCM at the device's native sample rate/channels
-        _recordingFormat = new WaveFormat(nativeFormat.SampleRate, 16, nativeFormat.Channels);
+        // LAME supports max 48 kHz — resample if the device runs faster
+        const int maxLameRate = 48000;
+        int encodeRate = Math.Min(nativeFormat.SampleRate, maxLameRate);
+        _recordingFormat = new WaveFormat(encodeRate, 16, nativeFormat.Channels);
+
+        // Set up managed resampler if needed
+        if (nativeFormat.SampleRate > maxLameRate)
+        {
+            _resampler = new FloatResampler(nativeFormat.SampleRate, encodeRate, nativeFormat.Channels);
+        }
+        else
+        {
+            _resampler = null;
+        }
+
+        // Create real-time MP3 encoder (writes compressed data to temp file)
+        _mp3TempPath = Path.Combine(Path.GetTempPath(), $"SamplerRecorder_{Guid.NewGuid():N}.mp3");
+        _mp3Writer = new LameMP3FileWriter(_mp3TempPath, _recordingFormat, _mp3BitRate);
 
         _loopbackCapture.StartRecording();
 
@@ -126,7 +139,7 @@ public sealed class AudioCaptureService : IDisposable
         _silenceTimer.AutoReset = true;
         _silenceTimer.Start();
 
-        FileLogger.Log($"Recording started. Native: {nativeFormat.SampleRate}Hz, {nativeFormat.Channels}ch, {nativeFormat.BitsPerSample}bit, {_sourceIsFloat}float. StartOnSound={_startOnSound}, StopOnSilence={_stopOnSilence}, Continuous={_continuousMode}");
+        FileLogger.Log($"Recording started. Native: {nativeFormat.SampleRate}Hz, {nativeFormat.Channels}ch, {nativeFormat.BitsPerSample}bit, {_sourceIsFloat}float. Encode: {encodeRate}Hz. Resampler={(_resampler != null ? $"active ({nativeFormat.SampleRate}->{encodeRate})" : "off")}. StartOnSound={_startOnSound}, StopOnSilence={_stopOnSilence}, Continuous={_continuousMode}");
     }
 
     public void Pause()
@@ -165,12 +178,9 @@ public sealed class AudioCaptureService : IDisposable
     {
         lock (_bufferLock)
         {
-            if (_usingTempFile && _tempFileStream != null)
-            {
-                _tempFileStream.Flush();
-                return File.ReadAllBytes(_tempFilePath!);
-            }
-            return _buffer.ToArray();
+            if (_mp3TempPath == null) return Array.Empty<byte>();
+            FinalizeMp3Writer();
+            return DecodeMp3ToPcm(_mp3TempPath);
         }
     }
 
@@ -187,24 +197,14 @@ public sealed class AudioCaptureService : IDisposable
 
         lock (_bufferLock)
         {
-            if (_usingTempFile && _tempFilePath != null)
-            {
-                var result = new byte[length];
-                using var fs = File.OpenRead(_tempFilePath);
-                fs.Seek(startByte, SeekOrigin.Begin);
-                int read = fs.Read(result, 0, (int)Math.Min(length, int.MaxValue));
-                if (read < length) Array.Resize(ref result, read);
-                return result;
-            }
-            else
-            {
-                var data = _buffer.GetBuffer();
-                long available = Math.Min(length, _buffer.Length - startByte);
-                if (available <= 0) return Array.Empty<byte>();
-                var result = new byte[available];
-                Array.Copy(data, startByte, result, 0, available);
-                return result;
-            }
+            if (_mp3TempPath == null) return Array.Empty<byte>();
+            FinalizeMp3Writer();
+            var pcm = DecodeMp3ToPcm(_mp3TempPath);
+            long available = Math.Min(length, pcm.Length - startByte);
+            if (available <= 0) return Array.Empty<byte>();
+            var result = new byte[available];
+            Array.Copy(pcm, startByte, result, 0, available);
+            return result;
         }
     }
 
@@ -212,8 +212,14 @@ public sealed class AudioCaptureService : IDisposable
     {
         Stop();
         _loopbackCapture?.Dispose();
-        _tempFileStream?.Dispose();
-        _buffer.Dispose();
+        FinalizeMp3Writer();
+        _resampler = null;
+        // Clean up temp MP3 file
+        if (_mp3TempPath != null)
+        {
+            try { File.Delete(_mp3TempPath); } catch { /* best effort */ }
+            _mp3TempPath = null;
+        }
     }
 
     // --- Silence timer ---
@@ -280,8 +286,9 @@ public sealed class AudioCaptureService : IDisposable
         bytes = (bytes / frameSize) * frameSize;
         if (bytes <= 0) return;
 
-        var silence = new byte[bytes]; // zeroed = silence for 16-bit PCM
-        WriteToOutput(silence, bytes, isSilence: true);
+        // Silence is already at encode rate (zeros), bypass resampling
+        var silence = new byte[bytes];
+        WriteToOutput(silence, bytes, isSilence: true, alreadyResampled: true);
     }
 
     // --- Data handler ---
@@ -294,59 +301,55 @@ public sealed class AudioCaptureService : IDisposable
         // Track that WASAPI is delivering data (regardless of content)
         _lastDataReceivedTime = DateTime.UtcNow;
 
-        byte[] pcm16;
-        int pcm16Len;
+        // Step 1: Ensure we have float data
+        byte[] floatData;
+        int floatLen;
 
         if (_sourceIsFloat)
         {
-            pcm16 = ConvertFloatTo16(e.Buffer, e.BytesRecorded);
-            pcm16Len = pcm16.Length;
+            floatData = e.Buffer;
+            floatLen = e.BytesRecorded;
         }
         else if (_sourceBitsPerSample == 16)
         {
-            pcm16 = e.Buffer;
-            pcm16Len = e.BytesRecorded;
+            floatData = Convert16ToFloat(e.Buffer, e.BytesRecorded);
+            floatLen = floatData.Length;
         }
         else if (_sourceBitsPerSample == 32)
         {
-            pcm16 = Convert32IntTo16(e.Buffer, e.BytesRecorded);
-            pcm16Len = pcm16.Length;
+            floatData = Convert32IntToFloat(e.Buffer, e.BytesRecorded);
+            floatLen = floatData.Length;
         }
         else
         {
             return;
         }
 
-        // Check if this buffer contains actual sound
-        float peak = ComputePeak(pcm16, pcm16Len);
+        // Step 2: Check if this buffer contains actual sound
+        float peak = ComputePeakFloat(floatData, floatLen);
         bool hasSound = peak > SilenceThreshold;
 
         if (_state == RecordingState.WaitingForSound)
         {
             if (hasSound)
             {
-                // First sound detected — transition to recording
                 _state = RecordingState.Recording;
                 _lastAudioTime = DateTime.UtcNow;
                 SoundDetected?.Invoke();
-                WriteToOutput(pcm16, pcm16Len);
+                ProcessAndWrite(floatData, floatLen);
             }
-            // Otherwise discard — we're still waiting
             return;
         }
 
-        // If we're skipping silence, check if sound returned
         if (_isSkippingSilence)
         {
             if (hasSound)
             {
-                // Sound is back — resume capturing
                 _isSkippingSilence = false;
                 _lastAudioTime = DateTime.UtcNow;
                 SilenceSkipChanged?.Invoke(false);
-                WriteToOutput(pcm16, pcm16Len);
+                ProcessAndWrite(floatData, floatLen);
             }
-            // Otherwise discard — still in silence gap
             return;
         }
 
@@ -356,7 +359,31 @@ public sealed class AudioCaptureService : IDisposable
             _lastAudioTime = DateTime.UtcNow;
         }
 
-        WriteToOutput(pcm16, pcm16Len);
+        ProcessAndWrite(floatData, floatLen);
+    }
+
+    /// <summary>
+    /// Resample (if needed) and convert float to 16-bit PCM, then write to output.
+    /// </summary>
+    private void ProcessAndWrite(byte[] floatData, int floatLen)
+    {
+        // Resample in float domain if device rate exceeds LAME limit
+        byte[] resampledFloat;
+
+        if (_resampler != null)
+        {
+            resampledFloat = _resampler.Process(floatData, floatLen);
+        }
+        else
+        {
+            resampledFloat = floatData;
+        }
+
+        if (resampledFloat.Length == 0) return;
+
+        // Convert float to 16-bit PCM
+        byte[] pcm16 = ConvertFloatTo16(resampledFloat, resampledFloat.Length);
+        WriteToOutput(pcm16, pcm16.Length, isSilence: false, alreadyResampled: true);
     }
 
     /// <summary>
@@ -380,19 +407,38 @@ public sealed class AudioCaptureService : IDisposable
     }
 
     /// <summary>
-    /// Convert 32-bit integer PCM to 16-bit by taking the upper 16 bits.
+    /// Convert 16-bit PCM to 32-bit IEEE float.
     /// </summary>
-    private static byte[] Convert32IntTo16(byte[] buffer, int bytesRecorded)
+    private static byte[] Convert16ToFloat(byte[] buffer, int bytesRecorded)
+    {
+        int sampleCount = bytesRecorded / 2;
+        var output = new byte[sampleCount * 4];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            short pcm = (short)(buffer[i * 2] | (buffer[i * 2 + 1] << 8));
+            float sample = pcm / 32768f;
+            var bytes = BitConverter.GetBytes(sample);
+            Array.Copy(bytes, 0, output, i * 4, 4);
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Convert 32-bit integer PCM to 32-bit IEEE float.
+    /// </summary>
+    private static byte[] Convert32IntToFloat(byte[] buffer, int bytesRecorded)
     {
         int sampleCount = bytesRecorded / 4;
-        var output = new byte[sampleCount * 2];
+        var output = new byte[sampleCount * 4];
 
         for (int i = 0; i < sampleCount; i++)
         {
             int sample = BitConverter.ToInt32(buffer, i * 4);
-            short pcm = (short)(sample >> 16);
-            output[i * 2] = (byte)(pcm & 0xFF);
-            output[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
+            float normalized = sample / (float)int.MaxValue;
+            var bytes = BitConverter.GetBytes(normalized);
+            Array.Copy(bytes, 0, output, i * 4, 4);
         }
 
         return output;
@@ -400,25 +446,13 @@ public sealed class AudioCaptureService : IDisposable
 
     // --- Output writing ---
 
-    private void WriteToOutput(byte[] buffer, int count, bool isSilence = false)
+    private void WriteToOutput(byte[] buffer, int count, bool isSilence = false, bool alreadyResampled = false)
     {
         if (count == 0) return;
 
         lock (_bufferLock)
         {
-            if (!_usingTempFile && RecordedBytes + count > _maxBufferBytes)
-            {
-                SwitchToTempFile();
-            }
-
-            if (_usingTempFile && _tempFileStream != null)
-            {
-                _tempFileStream.Write(buffer, 0, count);
-            }
-            else
-            {
-                _buffer.Write(buffer, 0, count);
-            }
+            _mp3Writer?.Write(buffer, 0, count);
         }
 
         RecordedBytes += count;
@@ -435,14 +469,37 @@ public sealed class AudioCaptureService : IDisposable
 
     // --- Helpers ---
 
-    private void SwitchToTempFile()
+    /// <summary>Compute peak amplitude from float audio data.</summary>
+    private static float ComputePeakFloat(byte[] floatBuffer, int bytesRecorded)
     {
-        _tempFilePath = Path.Combine(Path.GetTempPath(), $"SamplerRecorder_{Guid.NewGuid():N}.pcm");
-        _tempFileStream = new FileStream(_tempFilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        _tempFileStream.Write(_buffer.GetBuffer(), 0, (int)_buffer.Length);
-        _buffer.Dispose();
-        _buffer = new MemoryStream();
-        _usingTempFile = true;
+        float peak = 0;
+        int sampleCount = bytesRecorded / 4;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float sample = Math.Abs(BitConverter.ToSingle(floatBuffer, i * 4));
+            if (sample > peak) peak = sample;
+        }
+        return peak;
+    }
+
+    /// <summary>Finalize the LAME encoder (flushes VBR header and internal buffers).</summary>
+    private void FinalizeMp3Writer()
+    {
+        if (_mp3Writer != null)
+        {
+            _mp3Writer.Dispose();
+            _mp3Writer = null;
+        }
+    }
+
+    /// <summary>Decode an MP3 file back to raw 16-bit PCM.</summary>
+    private static byte[] DecodeMp3ToPcm(string mp3Path)
+    {
+        if (!File.Exists(mp3Path)) return Array.Empty<byte>();
+        using var reader = new Mp3FileReader(mp3Path);
+        using var ms = new MemoryStream();
+        reader.CopyTo(ms);
+        return ms.ToArray();
     }
 
     private static float ComputePeak(byte[] buffer, int bytesRecorded)
