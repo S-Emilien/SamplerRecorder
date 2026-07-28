@@ -21,20 +21,17 @@ public sealed class SessionStore
     }
 
     /// <summary>
-    /// Save a recording session: PCM as WAV + metadata JSON.
+    /// Save a recording session: MP3 audio + metadata JSON.
     /// </summary>
-    public string SaveSession(RecordingSession session, byte[] pcmData, WaveFormat format)
+    public string SaveSession(RecordingSession session, byte[] mp3Data)
     {
         var sessionDir = Path.Combine(_sessionsDir, session.Id.ToString("N"));
         Directory.CreateDirectory(sessionDir);
 
-        // Save audio as WAV
-        var wavPath = Path.Combine(sessionDir, "recording.wav");
-        using (var writer = new WaveFileWriter(wavPath, format))
-        {
-            writer.Write(pcmData, 0, pcmData.Length);
-        }
-        session.AudioFilePath = wavPath;
+        // Save audio as MP3 (already encoded during recording)
+        var mp3Path = Path.Combine(sessionDir, "recording.mp3");
+        File.WriteAllBytes(mp3Path, mp3Data);
+        session.AudioFilePath = mp3Path;
 
         // Save metadata
         var jsonPath = Path.Combine(sessionDir, "session.json");
@@ -82,21 +79,39 @@ public sealed class SessionStore
     }
 
     /// <summary>
-    /// Load PCM data from a saved session's WAV file.
+    /// Load MP3 data from a saved session.
     /// </summary>
-    public byte[]? LoadPcmData(RecordingSession session, out WaveFormat? format)
+    public byte[]? LoadMp3Data(RecordingSession session)
     {
-        format = null;
         if (session.AudioFilePath == null || !File.Exists(session.AudioFilePath))
             return null;
 
         try
         {
-            using var reader = new WaveFileReader(session.AudioFilePath);
-            format = reader.WaveFormat;
-            var data = new byte[reader.Length];
-            reader.Read(data, 0, data.Length);
-            return data;
+            return File.ReadAllBytes(session.AudioFilePath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Decode a session's MP3 to PCM for playback/export.
+    /// </summary>
+    public byte[]? DecodeSessionToPcm(RecordingSession session, out WaveFormat? format)
+    {
+        format = null;
+        var mp3Data = LoadMp3Data(session);
+        if (mp3Data == null || mp3Data.Length == 0) return null;
+
+        try
+        {
+            using var mp3Reader = new Mp3FileReader(new MemoryStream(mp3Data));
+            format = mp3Reader.WaveFormat;
+            var pcm = new byte[mp3Reader.Length];
+            mp3Reader.Read(pcm, 0, pcm.Length);
+            return pcm;
         }
         catch
         {

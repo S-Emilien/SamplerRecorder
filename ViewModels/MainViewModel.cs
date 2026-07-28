@@ -222,7 +222,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void StopRecording()
+    private async Task StopRecording()
     {
         if (RecordingState == RecordingState.Idle) return;
 
@@ -231,28 +231,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ElapsedTime = "00:00";
         StatusText = "Recording stopped. Saving...";
 
+        // Stop the UI timer only if playback is not active
+        if (!_isPlaying)
+            _uiTimer.Stop();
+
         // Finalize the recording session (always use _recordingSession, not _currentSession)
         if (_recordingSession != null)
         {
-            var pcmData = _captureService.GetRecordedData();
-            var format = _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
+            var session = _recordingSession;
+            var markers = _recordingMarkers.ToList();
+            var clips = _recordingClips.ToList();
 
-            // Compute duration from actual recorded data
-            long durationMs = (long)(pcmData.Length / (double)format.AverageBytesPerSecond * 1000);
-            _recordingSession.DurationMs = durationMs;
-            _recordingSession.Markers = _recordingMarkers.ToList();
-            _recordingSession.Clips = _recordingClips.ToList();
+            // Get compressed MP3 from RAM (fast — no decoding)
+            var mp3Data = _captureService.GetMp3Data();
+            var fmt = _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
+            long dur = _captureService.RecordedMs;
 
-            // Auto-save to disk
-            _sessionStore.SaveSession(_recordingSession, pcmData, format);
+            session.DurationMs = dur;
+            session.Markers = markers;
+            session.Clips = clips;
 
-            // If we were NOT viewing a separate session, update editor state to show the saved recording
+            // Write MP3 to disk on background thread (keeps UI responsive)
+            await Task.Run(() => _sessionStore.SaveSession(session, mp3Data));
+
+            // If we were NOT viewing a separate session, update editor state
             if (!_viewingSeparateSession)
             {
-                _currentSession = _recordingSession;
-                _playbackFormat = format;
-                _loadedPcmData = pcmData;
-                TotalDurationMs = durationMs;
+                _currentSession = session;
+                _playbackFormat = fmt;
+                _loadedMp3Data = mp3Data;
+                TotalDurationMs = dur;
                 ViewEndMs = TotalDurationMs;
                 ViewStartMs = 0;
             }
@@ -263,17 +271,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _viewingSeparateSession = false;
 
             RefreshSessionsList();
-            StatusText = $"Recording saved. Duration: {FormatTimeFull(durationMs)}";
+            StatusText = $"Recording saved. Duration: {FormatTimeFull(dur)}";
         }
         else
         {
             _viewingSeparateSession = false;
             StatusText = "Recording stopped.";
         }
-
-        // Stop the UI timer only if playback is not active
-        if (!_isPlaying)
-            _uiTimer.Stop();
     }
 
     [RelayCommand]
@@ -300,13 +304,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_currentSession == null) return;
 
-        var pcmData = _captureService.GetRecordedData();
-        var format = _captureService.RecordingFormat ?? new WaveFormat(44100, 16, 2);
+        var mp3Data = _loadedMp3Data;
+        if (mp3Data == null || mp3Data.Length == 0) return;
+
         _currentSession.Markers = Markers.ToList();
         _currentSession.Clips = Clips.Select(c => c.Clip).ToList();
 
-        _sessionStore.SaveSession(_currentSession, pcmData, format);
-        _playbackFormat = format;
+        _sessionStore.SaveSession(_currentSession, mp3Data);
         StatusText = "Session saved.";
     }
 
@@ -341,15 +345,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         clipVm ??= SelectedClip;
         if (clipVm == null) return;
 
-        var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
-        var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
+        var mp3Data = _loadedMp3Data;
+        if (mp3Data == null || mp3Data.Length == 0) return;
 
         var baseName = AudioExportService.GetSafeFileName(clipVm.Name);
         var outputPath = GetUniqueExportPath(baseName, ".mp3");
 
         try
         {
-            _exportService.ExportRegionToMp3(pcmData, format, clipVm.StartMs, clipVm.EndMs,
+            // Decode MP3 to PCM, extract region, re-encode
+            using var mp3Reader = new Mp3FileReader(new MemoryStream(mp3Data));
+            var format = mp3Reader.WaveFormat;
+            var pcm = new byte[mp3Reader.Length];
+            mp3Reader.Read(pcm, 0, pcm.Length);
+
+            _exportService.ExportRegionToMp3(pcm, format, clipVm.StartMs, clipVm.EndMs,
                 outputPath, _settings.Mp3BitRate);
             clipVm.IsExported = true;
             StatusText = $"Exported: {Path.GetFileName(outputPath)}";
@@ -445,24 +455,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void StartPlaybackFromPosition(double positionMs)
     {
-        var pcmData = _loadedPcmData ?? _captureService.GetRecordedData();
-        if (pcmData.Length == 0) return;
+        var mp3Data = _loadedMp3Data;
+        if (mp3Data == null || mp3Data.Length == 0) return;
 
-        var format = _playbackFormat ?? _captureService.RecordingFormat ?? new WaveFormat(48000, 16, 2);
-
-        var stream = new RawSourceWaveStream(new MemoryStream(pcmData), format);
+        var mp3Reader = new Mp3FileReader(new MemoryStream(mp3Data));
+        _playbackFormat = mp3Reader.WaveFormat;
 
         if (positionMs > 0)
         {
-            long bytePos = (long)(positionMs / 1000.0 * format.AverageBytesPerSecond);
-            bytePos -= bytePos % format.BlockAlign;
-            if (bytePos < stream.Length)
-                stream.Position = bytePos;
+            long bytePos = (long)(positionMs / 1000.0 * mp3Reader.WaveFormat.AverageBytesPerSecond);
+            bytePos -= bytePos % mp3Reader.WaveFormat.BlockAlign;
+            if (bytePos < mp3Reader.Length)
+                mp3Reader.Position = bytePos;
         }
 
         _wavePlayer?.Dispose();
         _wavePlayer = new WaveOutEvent();
-        _wavePlayer.Init(stream);
+        _wavePlayer.Init(mp3Reader);
         var sessionId = ++_playbackSessionId;
         _wavePlayer.PlaybackStopped += (s, e) =>
         {
@@ -473,7 +482,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _wavePlayer.Play();
         _isPlaying = true;
         IsCurrentlyPlaying = true;
-        _playbackStream = stream;
+        _playbackStream = mp3Reader;
         _uiTimer.Start();
     }
 
@@ -807,18 +816,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Stop any current editor playback before loading new session
         StopPlayback();
 
-        // Load PCM data and build waveform
-        var pcmData = _sessionStore.LoadPcmData(session, out var format);
-        if (pcmData != null && format != null)
+        // Load MP3 data and build waveform
+        var mp3Data = _sessionStore.LoadMp3Data(session);
+        if (mp3Data != null && mp3Data.Length > 0)
         {
-            _playbackFormat = format;
-            _waveformService.BuildFromPcm(pcmData, format.SampleRate, format.Channels);
+            _loadedMp3Data = mp3Data;
+
+            // Decode to PCM for waveform building only
+            using var mp3Reader = new Mp3FileReader(new MemoryStream(mp3Data));
+            _playbackFormat = mp3Reader.WaveFormat;
+            var pcm = new byte[mp3Reader.Length];
+            mp3Reader.Read(pcm, 0, pcm.Length);
+
+            _waveformService.BuildFromPcm(pcm, _playbackFormat.SampleRate, _playbackFormat.Channels);
             TotalDurationMs = _waveformService.TotalDurationMs;
             ViewStartMs = 0;
             ViewEndMs = TotalDurationMs;
-
-            // Store PCM for playback/export
-            _loadedPcmData = pcmData;
         }
 
         // Load markers and clips for the VIEWED session
@@ -839,7 +852,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = $"Loaded: {FormatTimeFull(TotalDurationMs)}";
     }
 
-    private byte[]? _loadedPcmData;
+    private byte[]? _loadedMp3Data;
 
     [RelayCommand]
     private void OpenRecordingsFolder()
@@ -1058,7 +1071,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void ResetEditorState()
     {
         StopPlayback();
-        _loadedPcmData = null;
+        _loadedMp3Data = null;
         _currentSession = null;
         _playbackFormat = null;
 

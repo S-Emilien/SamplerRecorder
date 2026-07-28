@@ -18,8 +18,8 @@ public sealed class AudioCaptureService : IDisposable
     private WasapiLoopbackCapture? _loopbackCapture;
     private readonly object _bufferLock = new();
     private RecordingState _state = RecordingState.Idle;
-    private WaveFormat? _recordingFormat; // always 16-bit PCM (post-conversion)
-    private string? _mp3TempPath;
+    private WaveFormat? _recordingFormat; // always 16-bit PCM at encode rate
+    private MemoryStream _mp3Stream = new();
     private LameMP3FileWriter? _mp3Writer;
     private int _mp3BitRate = 192;
 
@@ -32,16 +32,16 @@ public sealed class AudioCaptureService : IDisposable
 
     // Silence detection / continuous mode
     private System.Timers.Timer? _silenceTimer;
-    private DateTime _lastAudioTime = DateTime.MinValue;   // last time sound (above threshold) was detected
-    private DateTime _lastDataReceivedTime = DateTime.MinValue; // last time ANY data arrived from WASAPI
-    private DateTime _recordingStartTime;                  // when we entered Recording state
+    private DateTime _lastAudioTime = DateTime.MinValue;
+    private DateTime _lastDataReceivedTime = DateTime.MinValue;
+    private DateTime _recordingStartTime;
     private bool _startOnSound;
     private bool _stopOnSilence;
-    private bool _continuousMode; // inject silence when no audio (default true)
+    private bool _continuousMode;
     private double _silenceTimeoutMs;
-    private bool _isSkippingSilence; // true when we're in "skip silence" mode
-    private const float SilenceThreshold = 0.005f; // below this peak = silence
-    private const double ContinuousInjectionThresholdMs = 500; // only inject after 500ms of no WASAPI data
+    private bool _isSkippingSilence;
+    private const float SilenceThreshold = 0.005f;
+    private const double ContinuousInjectionThresholdMs = 500;
 
     public RecordingState State => _state;
     public WaveFormat? RecordingFormat => _recordingFormat;
@@ -52,9 +52,7 @@ public sealed class AudioCaptureService : IDisposable
     public event Action<float>? PeakAmplitudeChanged;
     public event Action? RecordingStopped;
     public event Action<byte[], int>? DataAvailable;
-    /// <summary>Fired when first sound is detected (for start-on-sound mode).</summary>
     public event Action? SoundDetected;
-    /// <summary>Fired when silence-skip mode changes (true = skipping, false = resumed).</summary>
     public event Action<bool>? SilenceSkipChanged;
 
     public const string DefaultDeviceLabel = "(Default Device)";
@@ -71,15 +69,11 @@ public sealed class AudioCaptureService : IDisposable
         return devices;
     }
 
-    /// <summary>
-    /// Configure recording behavior before calling StartRecording.
-    /// </summary>
     public void Configure(bool startOnSound, bool stopOnSilence, double silenceTimeoutSeconds)
     {
         _startOnSound = startOnSound;
         _stopOnSilence = stopOnSilence;
         _silenceTimeoutMs = silenceTimeoutSeconds * 1000.0;
-        // Continuous mode = NOT stop-on-silence (we fill silence to keep recording going)
         _continuousMode = !stopOnSilence;
     }
 
@@ -115,25 +109,18 @@ public sealed class AudioCaptureService : IDisposable
         _recordingFormat = new WaveFormat(encodeRate, 16, nativeFormat.Channels);
 
         // Set up managed resampler if needed
-        if (nativeFormat.SampleRate > maxLameRate)
-        {
-            _resampler = new FloatResampler(nativeFormat.SampleRate, encodeRate, nativeFormat.Channels);
-        }
-        else
-        {
-            _resampler = null;
-        }
+        _resampler = nativeFormat.SampleRate > maxLameRate
+            ? new FloatResampler(nativeFormat.SampleRate, encodeRate, nativeFormat.Channels)
+            : null;
 
-        // Create real-time MP3 encoder (writes compressed data to temp file)
-        _mp3TempPath = Path.Combine(Path.GetTempPath(), $"SamplerRecorder_{Guid.NewGuid():N}.mp3");
-        _mp3Writer = new LameMP3FileWriter(_mp3TempPath, _recordingFormat, _mp3BitRate);
+        // Create real-time MP3 encoder writing to RAM
+        _mp3Stream = new MemoryStream();
+        _mp3Writer = new LameMP3FileWriter(_mp3Stream, _recordingFormat, _mp3BitRate);
 
         _loopbackCapture.StartRecording();
 
-        // Set initial state based on start mode
         _state = _startOnSound ? RecordingState.WaitingForSound : RecordingState.Recording;
 
-        // Start silence monitor timer (fires every 20ms)
         _silenceTimer = new System.Timers.Timer(20);
         _silenceTimer.Elapsed += OnSilenceTimerTick;
         _silenceTimer.AutoReset = true;
@@ -174,37 +161,16 @@ public sealed class AudioCaptureService : IDisposable
         RecordingStopped?.Invoke();
     }
 
-    public byte[] GetRecordedData()
+    /// <summary>
+    /// Finalize the MP3 encoder and return the compressed MP3 data from RAM.
+    /// Call after Stop(). This is fast — no decoding involved.
+    /// </summary>
+    public byte[] GetMp3Data()
     {
         lock (_bufferLock)
         {
-            if (_mp3TempPath == null) return Array.Empty<byte>();
             FinalizeMp3Writer();
-            return DecodeMp3ToPcm(_mp3TempPath);
-        }
-    }
-
-    public byte[] GetRegion(long startMs, long endMs)
-    {
-        if (_recordingFormat == null) return Array.Empty<byte>();
-
-        int bytesPerMs = _recordingFormat.AverageBytesPerSecond / 1000;
-        long startByte = startMs * bytesPerMs;
-        long endByte = endMs * bytesPerMs;
-        long length = endByte - startByte;
-
-        if (length <= 0) return Array.Empty<byte>();
-
-        lock (_bufferLock)
-        {
-            if (_mp3TempPath == null) return Array.Empty<byte>();
-            FinalizeMp3Writer();
-            var pcm = DecodeMp3ToPcm(_mp3TempPath);
-            long available = Math.Min(length, pcm.Length - startByte);
-            if (available <= 0) return Array.Empty<byte>();
-            var result = new byte[available];
-            Array.Copy(pcm, startByte, result, 0, available);
-            return result;
+            return _mp3Stream.ToArray();
         }
     }
 
@@ -213,60 +179,42 @@ public sealed class AudioCaptureService : IDisposable
         Stop();
         _loopbackCapture?.Dispose();
         FinalizeMp3Writer();
+        _mp3Stream.Dispose();
         _resampler = null;
-        // Clean up temp MP3 file
-        if (_mp3TempPath != null)
-        {
-            try { File.Delete(_mp3TempPath); } catch { /* best effort */ }
-            _mp3TempPath = null;
-        }
     }
 
     // --- Silence timer ---
 
     private void OnSilenceTimerTick(object? sender, System.Timers.ElapsedEventArgs e)
     {
-        if (_state == RecordingState.WaitingForSound)
-        {
-            return;
-        }
-
+        if (_state == RecordingState.WaitingForSound) return;
         if (_state != RecordingState.Recording) return;
 
         var now = DateTime.UtcNow;
 
-        // For silence-skip: measure from last SOUND (or from recording start if no sound yet)
         var soundReference = _lastAudioTime != DateTime.MinValue ? _lastAudioTime : _recordingStartTime;
         double msSinceLastSound = (now - soundReference).TotalMilliseconds;
 
         if (_stopOnSilence && !_isSkippingSilence && msSinceLastSound > _silenceTimeoutMs)
         {
-            // Silence exceeded timeout — enter skip mode (stop writing to buffer)
             _isSkippingSilence = true;
             SilenceSkipChanged?.Invoke(true);
             return;
         }
 
-        // For continuous mode: only inject silence when WASAPI has completely stopped delivering
-        // (no data at all for >500ms). This avoids interfering with normal playback.
         if (_continuousMode && _lastDataReceivedTime != DateTime.MinValue)
         {
             double msSinceLastData = (now - _lastDataReceivedTime).TotalMilliseconds;
             if (msSinceLastData > ContinuousInjectionThresholdMs)
             {
-                // WASAPI stopped delivering — inject silence to fill the gap
-                // Inject exactly the amount of time that passed since last data, minus threshold
                 int injectMs = (int)(msSinceLastData - ContinuousInjectionThresholdMs);
-                // Cap to avoid huge injections (e.g. after system sleep)
                 injectMs = Math.Min(injectMs, 100);
                 InjectSilence(injectMs);
-                // Update reference so we don't re-inject the same gap
                 _lastDataReceivedTime = now.AddMilliseconds(-(ContinuousInjectionThresholdMs));
             }
         }
         else if (_continuousMode && _lastDataReceivedTime == DateTime.MinValue)
         {
-            // No data has ever been received — inject silence from recording start
             double msSinceStart = (now - _recordingStartTime).TotalMilliseconds;
             if (msSinceStart > ContinuousInjectionThresholdMs)
             {
@@ -281,14 +229,12 @@ public sealed class AudioCaptureService : IDisposable
     {
         if (_recordingFormat == null) return;
         int bytes = _recordingFormat.AverageBytesPerSecond * durationMs / 1000;
-        // Align to frame boundary
         int frameSize = _recordingFormat.Channels * 2;
         bytes = (bytes / frameSize) * frameSize;
         if (bytes <= 0) return;
 
-        // Silence is already at encode rate (zeros), bypass resampling
         var silence = new byte[bytes];
-        WriteToOutput(silence, bytes, isSilence: true, alreadyResampled: true);
+        WriteToOutput(silence, bytes, isSilence: true);
     }
 
     // --- Data handler ---
@@ -298,15 +244,15 @@ public sealed class AudioCaptureService : IDisposable
         if (e.BytesRecorded == 0) return;
         if (_state != RecordingState.Recording && _state != RecordingState.WaitingForSound) return;
 
-        // Track that WASAPI is delivering data (regardless of content)
         _lastDataReceivedTime = DateTime.UtcNow;
 
-        // Step 1: Ensure we have float data
+        // Ensure we have float data (only the valid portion of the buffer)
         byte[] floatData;
         int floatLen;
 
         if (_sourceIsFloat)
         {
+            // e.Buffer may be larger than e.BytesRecorded — only use valid bytes
             floatData = e.Buffer;
             floatLen = e.BytesRecorded;
         }
@@ -325,7 +271,7 @@ public sealed class AudioCaptureService : IDisposable
             return;
         }
 
-        // Step 2: Check if this buffer contains actual sound
+        // Check if this buffer contains actual sound
         float peak = ComputePeakFloat(floatData, floatLen);
         bool hasSound = peak > SilenceThreshold;
 
@@ -353,7 +299,6 @@ public sealed class AudioCaptureService : IDisposable
             return;
         }
 
-        // Normal recording
         if (hasSound)
         {
             _lastAudioTime = DateTime.UtcNow;
@@ -363,32 +308,31 @@ public sealed class AudioCaptureService : IDisposable
     }
 
     /// <summary>
-    /// Resample (if needed) and convert float to 16-bit PCM, then write to output.
+    /// Resample (if needed) and convert float to 16-bit PCM, then write to MP3 encoder.
+    /// IMPORTANT: floatLen is the number of valid bytes in floatData (may be less than floatData.Length).
     /// </summary>
     private void ProcessAndWrite(byte[] floatData, int floatLen)
     {
-        // Resample in float domain if device rate exceeds LAME limit
-        byte[] resampledFloat;
+        byte[] pcm16;
 
         if (_resampler != null)
         {
-            resampledFloat = _resampler.Process(floatData, floatLen);
+            // Resampler.Process correctly uses the length parameter
+            byte[] resampledFloat = _resampler.Process(floatData, floatLen);
+            if (resampledFloat.Length == 0) return;
+            pcm16 = ConvertFloatTo16(resampledFloat, resampledFloat.Length);
         }
         else
         {
-            resampledFloat = floatData;
+            // No resampling — convert only the valid portion (floatLen bytes)
+            pcm16 = ConvertFloatTo16(floatData, floatLen);
         }
 
-        if (resampledFloat.Length == 0) return;
-
-        // Convert float to 16-bit PCM
-        byte[] pcm16 = ConvertFloatTo16(resampledFloat, resampledFloat.Length);
-        WriteToOutput(pcm16, pcm16.Length, isSilence: false, alreadyResampled: true);
+        WriteToOutput(pcm16, pcm16.Length, isSilence: false);
     }
 
-    /// <summary>
-    /// Convert 32-bit IEEE float samples to 16-bit PCM.
-    /// </summary>
+    // --- Format conversion ---
+
     private static byte[] ConvertFloatTo16(byte[] floatBuffer, int bytesRecorded)
     {
         int sampleCount = bytesRecorded / 4;
@@ -406,9 +350,6 @@ public sealed class AudioCaptureService : IDisposable
         return output;
     }
 
-    /// <summary>
-    /// Convert 16-bit PCM to 32-bit IEEE float.
-    /// </summary>
     private static byte[] Convert16ToFloat(byte[] buffer, int bytesRecorded)
     {
         int sampleCount = bytesRecorded / 2;
@@ -425,9 +366,6 @@ public sealed class AudioCaptureService : IDisposable
         return output;
     }
 
-    /// <summary>
-    /// Convert 32-bit integer PCM to 32-bit IEEE float.
-    /// </summary>
     private static byte[] Convert32IntToFloat(byte[] buffer, int bytesRecorded)
     {
         int sampleCount = bytesRecorded / 4;
@@ -446,7 +384,7 @@ public sealed class AudioCaptureService : IDisposable
 
     // --- Output writing ---
 
-    private void WriteToOutput(byte[] buffer, int count, bool isSilence = false, bool alreadyResampled = false)
+    private void WriteToOutput(byte[] buffer, int count, bool isSilence)
     {
         if (count == 0) return;
 
@@ -463,13 +401,11 @@ public sealed class AudioCaptureService : IDisposable
             PeakAmplitudeChanged?.Invoke(peak);
         }
 
-        // Notify waveform service
         DataAvailable?.Invoke(buffer, count);
     }
 
     // --- Helpers ---
 
-    /// <summary>Compute peak amplitude from float audio data.</summary>
     private static float ComputePeakFloat(byte[] floatBuffer, int bytesRecorded)
     {
         float peak = 0;
@@ -482,7 +418,6 @@ public sealed class AudioCaptureService : IDisposable
         return peak;
     }
 
-    /// <summary>Finalize the LAME encoder (flushes VBR header and internal buffers).</summary>
     private void FinalizeMp3Writer()
     {
         if (_mp3Writer != null)
@@ -490,16 +425,6 @@ public sealed class AudioCaptureService : IDisposable
             _mp3Writer.Dispose();
             _mp3Writer = null;
         }
-    }
-
-    /// <summary>Decode an MP3 file back to raw 16-bit PCM.</summary>
-    private static byte[] DecodeMp3ToPcm(string mp3Path)
-    {
-        if (!File.Exists(mp3Path)) return Array.Empty<byte>();
-        using var reader = new Mp3FileReader(mp3Path);
-        using var ms = new MemoryStream();
-        reader.CopyTo(ms);
-        return ms.ToArray();
     }
 
     private static float ComputePeak(byte[] buffer, int bytesRecorded)
