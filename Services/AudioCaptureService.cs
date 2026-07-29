@@ -157,6 +157,9 @@ public sealed class AudioCaptureService : IDisposable
         _silenceTimer?.Dispose();
         _silenceTimer = null;
         _loopbackCapture?.StopRecording();
+        _loopbackCapture?.Dispose();
+        _loopbackCapture = null;
+        _resampler = null;
         _state = RecordingState.Idle;
         RecordingStopped?.Invoke();
     }
@@ -164,13 +167,18 @@ public sealed class AudioCaptureService : IDisposable
     /// <summary>
     /// Finalize the MP3 encoder and return the compressed MP3 data from RAM.
     /// Call after Stop(). This is fast — no decoding involved.
+    /// Releases the internal stream buffer after extraction.
     /// </summary>
     public byte[] GetMp3Data()
     {
         lock (_bufferLock)
         {
             FinalizeMp3Writer();
-            return _mp3Stream.ToArray();
+            var data = _mp3Stream.ToArray();
+            // Release the internal buffer — data has been extracted
+            _mp3Stream.Dispose();
+            _mp3Stream = new MemoryStream();
+            return data;
         }
     }
 

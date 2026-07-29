@@ -1096,9 +1096,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (RecordingState == RecordingState.Idle)
         {
+            _waveformService.Reset();
             ViewStartMs = 0;
             ViewEndMs = 60000;
             TotalDurationMs = 0;
+
+            // Force Gen2 GC to reclaim large audio buffers on the LOH
+            GC.Collect(2, GCCollectionMode.Optimized, false);
         }
 
         EditorTitle = "Editor";

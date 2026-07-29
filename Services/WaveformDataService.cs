@@ -26,6 +26,8 @@ public sealed class WaveformDataService
         {
             _minPeaks.Clear();
             _maxPeaks.Clear();
+            _minPeaks.TrimExcess();
+            _maxPeaks.TrimExcess();
             _sampleCount = 0;
             _sampleRate = sampleRate;
             _channels = channels;
