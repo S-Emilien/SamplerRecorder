@@ -18,7 +18,7 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
     </Window.Resources>
 
-    <Grid>
+    <Grid Background="{StaticResource BgDarkBrush}">
         <!-- ==================== HOME SCREEN ==================== -->
         <Grid x:Name="HomeScreen" Visibility="Visible">
             <Grid.RowDefinitions>
