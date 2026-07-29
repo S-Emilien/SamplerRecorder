@@ -50,7 +50,13 @@ public sealed class SettingsService
 
     public static string GetSessionsDir()
     {
-        var dir = Path.Combine(SettingsDir, "sessions");
+        return GetSessionsDir(null);
+    }
+
+    public static string GetSessionsDir(string? workingDir)
+    {
+        var baseDir = string.IsNullOrWhiteSpace(workingDir) ? SettingsDir : workingDir;
+        var dir = Path.Combine(baseDir, "sessions");
         Directory.CreateDirectory(dir);
         return dir;
     }

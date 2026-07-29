@@ -457,6 +457,34 @@
             <!-- Settings Content -->
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,20">
                 <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+                    <!-- Folders Section -->
+                    <TextBlock Text="Folders" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,6"/>
+                    <TextBlock Text="Choose where exported clips and recording sessions are stored. Leave unchanged to use default locations."
+                               Foreground="{StaticResource TextDimBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                    <!-- Exports folder -->
+                    <TextBlock Text="Exports folder (clips)" FontSize="12" Margin="0,0,0,4"/>
+                    <DockPanel Margin="0,0,0,14">
+                        <Button DockPanel.Dock="Right" Content="Browse..." Command="{Binding ChangeExportFolderCommand}"
+                                Padding="12,5" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding ExportFolderPath, Mode=OneWay}" IsReadOnly="True"
+                                 VerticalContentAlignment="Center" Padding="6,5"
+                                 Foreground="{StaticResource TextBrush}" FontSize="12"/>
+                    </DockPanel>
+
+                    <!-- Working directory -->
+                    <TextBlock Text="Working directory (recordings)" FontSize="12" Margin="0,0,0,4"/>
+                    <DockPanel Margin="0,0,0,6">
+                        <Button DockPanel.Dock="Right" Content="Browse..." Command="{Binding ChangeWorkingDirectoryCommand}"
+                                Padding="12,5" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding WorkingDirectoryPath, Mode=OneWay}" IsReadOnly="True"
+                                 VerticalContentAlignment="Center" Padding="6,5"
+                                 Foreground="{StaticResource TextBrush}" FontSize="12"/>
+                    </DockPanel>
+                    <TextBlock Text="Default: %AppData%\Roaming\SamplerRecorder"
+                               Foreground="{StaticResource TextDimBrush}" FontSize="10" Margin="0,0,0,24"/>
+
+                    <!-- Hotkeys Section -->
                     <TextBlock Text="Global Hotkeys" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,6"/>
                     <TextBlock Text="Click Assign and press the desired key combination or mouse button. Hotkeys work globally, even when the app is not focused."
                                Foreground="{StaticResource TextDimBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,20"/>

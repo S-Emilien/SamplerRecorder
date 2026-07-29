@@ -62,6 +62,7 @@ public sealed class AppSettings
     public bool RecordSystemAudio { get; set; } = true;
     public string ExportPath { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "SamplerRecorder", "Exports");
+    public string? WorkingDirectory { get; set; }
     public int Mp3BitRate { get; set; } = 192;
 
     // Recording mode options

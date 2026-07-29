@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Win32;
 using NAudio.Wave;
 using SamplerRecorder.Models;
 using SamplerRecorder.Services;
@@ -18,7 +19,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly AudioExportService _exportService = new();
     private readonly HotkeyService _hotkeyService = new();
     private readonly SettingsService _settingsService = new();
-    private readonly SessionStore _sessionStore = new();
+    private SessionStore _sessionStore;
     private readonly DispatcherTimer _uiTimer;
 
     private AppSettings _settings;
@@ -39,6 +40,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         _settings = _settingsService.Load();
+        _sessionStore = CreateSessionStore();
 
         try
         {
@@ -57,6 +59,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StartOnSound = _settings.StartOnSound;
         StopOnSilence = _settings.StopOnSilence;
         SilenceTimeoutSeconds = _settings.SilenceTimeoutSeconds;
+        ExportFolderPath = _settings.ExportPath;
+        WorkingDirectoryPath = _settings.WorkingDirectory ?? GetEffectiveWorkingDirectory();
 
         _captureService.PeakAmplitudeChanged += OnPeakAmplitude;
         _captureService.DataAvailable += OnDataAvailable;
@@ -102,6 +106,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _editorTitle = "Editor";
     [ObservableProperty] private ObservableCollection<SessionItemViewModel> _savedSessions = new();
     [ObservableProperty] private ObservableCollection<AllClipsItemViewModel> _allClips = new();
+
+    // --- Folder settings ---
+    [ObservableProperty] private string _exportFolderPath = string.Empty;
+    [ObservableProperty] private string _workingDirectoryPath = string.Empty;
 
     // --- Hotkey settings ---
     [ObservableProperty] private string _hotkeyValidationError = string.Empty;
@@ -672,6 +680,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void OpenSettings()
     {
         HotkeyValidationError = string.Empty;
+        ExportFolderPath = _settings.ExportPath;
+        WorkingDirectoryPath = _settings.WorkingDirectory ?? GetEffectiveWorkingDirectory();
+    }
+
+    [RelayCommand]
+    private void ChangeExportFolder()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select Exports Folder",
+            InitialDirectory = Directory.Exists(_settings.ExportPath) ? _settings.ExportPath : null
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _settings.ExportPath = dialog.FolderName;
+            ExportFolderPath = dialog.FolderName;
+            SaveSettings();
+            RefreshSessionsList();
+            StatusText = $"Exports folder changed to: {dialog.FolderName}";
+        }
+    }
+
+    [RelayCommand]
+    private void ChangeWorkingDirectory()
+    {
+        var currentDir = _settings.WorkingDirectory ??
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SamplerRecorder");
+
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select Working Directory",
+            InitialDirectory = Directory.Exists(currentDir) ? currentDir : null
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _settings.WorkingDirectory = dialog.FolderName;
+            WorkingDirectoryPath = dialog.FolderName;
+            _sessionStore = CreateSessionStore();
+            SaveSettings();
+            RefreshSessionsList();
+            StatusText = $"Working directory changed to: {dialog.FolderName}";
+        }
+    }
+
+    private SessionStore CreateSessionStore()
+    {
+        var sessionsDir = SettingsService.GetSessionsDir(_settings.WorkingDirectory);
+        return new SessionStore(sessionsDir);
+    }
+
+    private static string GetEffectiveWorkingDirectory()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SamplerRecorder");
     }
 
     [RelayCommand]
@@ -857,7 +921,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void OpenRecordingsFolder()
     {
-        var dir = SettingsService.GetSessionsDir();
+        var dir = SettingsService.GetSessionsDir(_settings.WorkingDirectory);
         Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
     }
 

@@ -15,9 +15,9 @@ public sealed class SessionStore
 
     private readonly string _sessionsDir;
 
-    public SessionStore()
+    public SessionStore(string sessionsDir)
     {
-        _sessionsDir = SettingsService.GetSessionsDir();
+        _sessionsDir = sessionsDir;
     }
 
     /// <summary>
