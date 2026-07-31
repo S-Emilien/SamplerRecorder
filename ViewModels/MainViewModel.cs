@@ -30,6 +30,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _isPlaying;
     private int _playbackSessionId; // guards against stale PlaybackStopped events
     private long _playClipEndMs = -1; // when >= 0, playback auto-pauses at this boundary
+    private ClipItemViewModel? _playingEditorClip; // tracks which editor clip is previewing
 
     // --- Recording isolation: keeps active recording separate from editor viewing ---
     private RecordingSession? _recordingSession;       // the session being actively recorded
@@ -435,7 +436,82 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // Manual play clears clip boundary
         _playClipEndMs = -1;
+
+        // Clear editor clip playing state (free-running playback, no boundary)
+        if (_playingEditorClip != null)
+        {
+            _playingEditorClip.IsPlaying = false;
+            _playingEditorClip = null;
+        }
+
         StartPlaybackFromPosition(PlaybackPosition);
+    }
+
+    [RelayCommand]
+    private void PlayEditorClip(ClipItemViewModel? clipVm)
+    {
+        if (clipVm == null) return;
+
+        // Toggle: if this clip is currently playing, pause it
+        if (_isPlaying && _playingEditorClip == clipVm)
+        {
+            _playbackSessionId++;
+            _wavePlayer?.Stop();
+            _wavePlayer?.Dispose();
+            _wavePlayer = null;
+            _playbackStream?.Dispose();
+            _playbackStream = null;
+            _isPlaying = false;
+            IsCurrentlyPlaying = false;
+            clipVm.IsPlaying = false;
+            _playingEditorClip = null;
+            return;
+        }
+
+        // Resume: if paused on the same clip
+        if (!_isPlaying && _playingEditorClip == clipVm && PlaybackPosition >= clipVm.StartMs && PlaybackPosition < clipVm.EndMs)
+        {
+            _playClipEndMs = clipVm.EndMs;
+            StartPlaybackFromPosition(PlaybackPosition);
+            clipVm.IsPlaying = true;
+            return;
+        }
+
+        // Stop any current playback
+        if (_isPlaying)
+        {
+            _playbackSessionId++;
+            _wavePlayer?.Stop();
+            _wavePlayer?.Dispose();
+            _wavePlayer = null;
+            _playbackStream?.Dispose();
+            _playbackStream = null;
+            _isPlaying = false;
+            IsCurrentlyPlaying = false;
+        }
+
+        // Clear previous clip indicator
+        if (_playingEditorClip != null)
+            _playingEditorClip.IsPlaying = false;
+
+        // Play the clip region
+        _playingEditorClip = clipVm;
+        _playClipEndMs = clipVm.EndMs;
+        PlaybackPosition = clipVm.StartMs;
+        StartPlaybackFromPosition(clipVm.StartMs);
+        clipVm.IsPlaying = true;
+    }
+
+    [RelayCommand]
+    private void StopEditorClip(ClipItemViewModel? clipVm)
+    {
+        if (clipVm == null) return;
+
+        clipVm.IsPlaying = false;
+        if (_playingEditorClip == clipVm)
+            _playingEditorClip = null;
+
+        StopPlayback();
     }
 
     [RelayCommand]
@@ -454,6 +530,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _playbackStream = null;
             _isPlaying = false;
             IsCurrentlyPlaying = false;
+        }
+
+        // Clear editor clip playing state
+        if (_playingEditorClip != null)
+        {
+            _playingEditorClip.IsPlaying = false;
+            _playingEditorClip = null;
         }
 
         _playClipEndMs = SelectionEnd;
@@ -507,6 +590,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IsCurrentlyPlaying = false;
         PlaybackPosition = 0;
         _playClipEndMs = -1;
+
+        // Clear editor clip playing state
+        if (_playingEditorClip != null)
+        {
+            _playingEditorClip.IsPlaying = false;
+            _playingEditorClip = null;
+        }
     }
 
     /// <summary>
@@ -641,6 +731,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _playbackStream = null;
                 _isPlaying = false;
                 IsCurrentlyPlaying = false;
+
+                // Clear editor clip playing state
+                if (_playingEditorClip != null)
+                {
+                    _playingEditorClip.IsPlaying = false;
+                    _playingEditorClip = null;
+                }
             }
             else if (PlaybackPosition >= TotalDurationMs)
             {
@@ -840,30 +937,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // --- New commands for editor ---
-
-    [RelayCommand]
-    private void NudgeStart(string deltaStr)
-    {
-        if (SelectionStart < 0) return;
-        if (long.TryParse(deltaStr, out var delta))
-        {
-            SelectionStart = Math.Max(0, SelectionStart + delta);
-            if (SelectionStart >= SelectionEnd && SelectionEnd > 0)
-                SelectionStart = SelectionEnd - 50;
-        }
-    }
-
-    [RelayCommand]
-    private void NudgeEnd(string deltaStr)
-    {
-        if (SelectionEnd < 0) return;
-        if (long.TryParse(deltaStr, out var delta))
-        {
-            SelectionEnd = Math.Min(TotalDurationMs, SelectionEnd + delta);
-            if (SelectionEnd <= SelectionStart && SelectionStart >= 0)
-                SelectionEnd = SelectionStart + 50;
-        }
-    }
 
     [RelayCommand]
     private void OpenSession(SessionItemViewModel? sessionVm)

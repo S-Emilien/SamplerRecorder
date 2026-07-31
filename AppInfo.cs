@@ -5,7 +5,7 @@ namespace SamplerRecorder;
 /// </summary>
 public static class AppInfo
 {
-    public const string Version = "1.0.3";
+    public const string Version = "1.0.4";
     public const string Author = "Net4King";
     public const string Copyright = $"© {Author} — Version {Version}";
 }

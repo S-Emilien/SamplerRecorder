@@ -21,6 +21,9 @@ public partial class ClipItemViewModel : ObservableObject
     [ObservableProperty]
     private bool _isExported;
 
+    [ObservableProperty]
+    private bool _isPlaying;
+
     public string DurationText
     {
         get

@@ -298,12 +298,18 @@
                 <controls:WaveformControl x:Name="WaveformDisplay"/>
             </Border>
 
-            <!-- Selection Info + Nudge Controls -->
+            <!-- Selection Info -->
             <Border Grid.Row="3" Background="{StaticResource BgMediumBrush}" Padding="10,6" Margin="8,0"
                     CornerRadius="4" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
-                <DockPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
                     <!-- Selection times -->
-                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left">
                         <TextBlock Text="In: " Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding SelectionStartText}" FontFamily="Consolas" FontSize="13"
                                    Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
@@ -315,32 +321,14 @@
                                    Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Center"/>
                     </StackPanel>
 
-                    <!-- Nudge buttons -->
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <TextBlock Text="Nudge:" Foreground="{StaticResource TextDimBrush}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="11"/>
-                        <Button Content="-500ms" Command="{Binding NudgeStartCommand}" CommandParameter="-500"
-                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
-                        <Button Content="-100ms" Command="{Binding NudgeStartCommand}" CommandParameter="-100"
-                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
-                        <Button Content="-50ms" Command="{Binding NudgeStartCommand}" CommandParameter="-50"
-                                Padding="5,2" Margin="0,0,8,0" FontSize="10"/>
-                        <Button Content="+50ms" Command="{Binding NudgeEndCommand}" CommandParameter="50"
-                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
-                        <Button Content="+100ms" Command="{Binding NudgeEndCommand}" CommandParameter="100"
-                                Padding="5,2" Margin="0,0,2,0" FontSize="10"/>
-                        <Button Content="+500ms" Command="{Binding NudgeEndCommand}" CommandParameter="500"
-                                Padding="5,2" FontSize="10"/>
-                    </StackPanel>
-
-                    <!-- Center: Play selection + Create clip -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <!-- Play selection + Create clip (true center) -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
                         <Button Content="&#x25B6; Play Selection" Command="{Binding PlaySelectionCommand}"
                                 Padding="10,4" Margin="0,0,8,0"/>
                         <Button Content="+ Create Clip from Selection" Command="{Binding CreateClipCommand}"
                                 Style="{StaticResource AccentButton}" Padding="12,4"/>
                     </StackPanel>
-                </DockPanel>
+                </Grid>
             </Border>
 
             <!-- Clips + Markers -->
@@ -375,6 +363,23 @@
                                                        Margin="0,0,6,0"
                                                        Visibility="{Binding IsExported, Converter={StaticResource BoolToVis}}"
                                                        ToolTip="Exported"/>
+                                            <Button Command="{Binding DataContext.PlayEditorClipCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="0" Margin="0,0,3,0"
+                                                    Width="24" Height="22" ToolTip="Play/Pause">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Content" Value="&#x25B6;"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                                <Setter Property="Content" Value="&#x23F8;"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Content="&#x23F9;" Command="{Binding DataContext.StopEditorClipCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}" Padding="0" Margin="0,0,3,0"
+                                                    Width="24" Height="22" ToolTip="Stop"/>
                                             <Button Content="&#x1F4E4;" Command="{Binding DataContext.ExportClipCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
                                                     CommandParameter="{Binding}" Padding="4,2" Margin="0,0,3,0"
                                                     FontSize="11" Width="26" Height="22" ToolTip="Export"/>
