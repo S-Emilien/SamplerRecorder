@@ -47,12 +47,12 @@ public class WaveformControl : FrameworkElement
     public event Action<double>? SeekRequested;
 
     // Colors
-    private static readonly Color BgColor = Color.FromRgb(24, 24, 32);
-    private static readonly Color WaveColor = Color.FromRgb(80, 180, 255);
-    private static readonly Color WaveFillColor = Color.FromArgb(120, 80, 180, 255);
-    private static readonly Color MarkerColor = Color.FromRgb(255, 200, 50);
-    private static readonly Color SelectionColor = Color.FromArgb(60, 255, 255, 255);
-    private static readonly Color CursorColor = Color.FromRgb(255, 80, 80);
+    private static readonly Color BgColor = Color.FromRgb(30, 30, 30);
+    private static readonly Color WaveColor = Color.FromRgb(0, 122, 204);
+    private static readonly Color WaveFillColor = Color.FromArgb(120, 0, 122, 204);
+    private static readonly Color MarkerColor = Color.FromRgb(202, 167, 0);
+    private static readonly Color SelectionColor = Color.FromArgb(90, 38, 79, 120);
+    private static readonly Color CursorColor = Color.FromRgb(244, 71, 71);
     private static readonly Color GridColor = Color.FromArgb(40, 255, 255, 255);
     private static readonly Color CenterLineColor = Color.FromArgb(60, 255, 255, 255);
 

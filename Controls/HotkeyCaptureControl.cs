@@ -123,15 +123,15 @@ public sealed class HotkeyCaptureControl : UserControl
         if (_isCapturing)
         {
             _displayText.Text = "Press keys...";
-            _displayText.Foreground = new SolidColorBrush(Color.FromRgb(0x50, 0xB4, 0xFF)); // Accent
+            _displayText.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)); // Accent
         }
         else
         {
             var text = BindingDisplay;
             _displayText.Text = text;
             _displayText.Foreground = text == "Not assigned"
-                ? new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0xA0)) // Dim
-                : new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE8)); // Normal text
+                ? new SolidColorBrush(Color.FromRgb(0x85, 0x85, 0x85)) // Dim
+                : new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)); // Normal text
         }
     }
 
