@@ -481,7 +481,7 @@
                                  VerticalContentAlignment="Center" Padding="6,5"
                                  Foreground="{StaticResource TextBrush}" FontSize="12"/>
                     </DockPanel>
-                    <TextBlock Text="Default: %AppData%\Roaming\SamplerRecorder"
+                    <TextBlock Text="Default: %AppData%\SamplerRecorder"
                                Foreground="{StaticResource TextDimBrush}" FontSize="10" Margin="0,0,0,24"/>
 
                     <!-- Hotkeys Section -->

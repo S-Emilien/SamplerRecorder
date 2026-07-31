@@ -11,6 +11,9 @@ namespace SamplerRecorder.Controls;
 /// </summary>
 public sealed class HotkeyCaptureControl : UserControl
 {
+    /// <summary>Tracks the single control currently in capture mode (mutual exclusion).</summary>
+    private static HotkeyCaptureControl? _activeCapture;
+
     private readonly TextBlock _displayText;
     private readonly Button _assignButton;
     private readonly Button _clearButton;
@@ -86,7 +89,7 @@ public sealed class HotkeyCaptureControl : UserControl
             Margin = new Thickness(6, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
-        _assignButton.Click += (_, _) => StartCapture();
+        _assignButton.Click += StartCaptureHandler;
         DockPanel.SetDock(_assignButton, Dock.Right);
         panel.Children.Add(_assignButton);
 
@@ -134,7 +137,12 @@ public sealed class HotkeyCaptureControl : UserControl
 
     private void StartCapture()
     {
+        // Cancel any other control that is currently capturing (mutual exclusion)
+        if (_activeCapture != null && _activeCapture != this)
+            _activeCapture.CancelCapture();
+
         _isCapturing = true;
+        _activeCapture = this;
         _assignButton.Content = "Cancel";
         _assignButton.Click -= StartCaptureHandler;
         _assignButton.Click += CancelCaptureHandler;
@@ -146,13 +154,34 @@ public sealed class HotkeyCaptureControl : UserControl
     private void StopCapture()
     {
         _isCapturing = false;
+        if (_activeCapture == this)
+            _activeCapture = null;
         _assignButton.Content = "Assign";
         _assignButton.Click -= CancelCaptureHandler;
+        _assignButton.Click += StartCaptureHandler;
         UpdateDisplay();
+    }
+
+    /// <summary>Cancels an in-progress capture from outside (e.g. another control taking over).</summary>
+    public void CancelCapture()
+    {
+        if (_isCapturing)
+            StopCapture();
     }
 
     private void StartCaptureHandler(object sender, RoutedEventArgs e) => StartCapture();
     private void CancelCaptureHandler(object sender, RoutedEventArgs e) => StopCapture();
+
+    /// <summary>Walks up the visual tree to check if <paramref name="child"/> is within <paramref name="parent"/>.</summary>
+    private static bool IsWithinElement(DependencyObject child, DependencyObject parent)
+    {
+        while (child != null)
+        {
+            if (child == parent) return true;
+            child = System.Windows.Media.VisualTreeHelper.GetParent(child);
+        }
+        return false;
+    }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -188,6 +217,10 @@ public sealed class HotkeyCaptureControl : UserControl
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (!_isCapturing) return;
+
+        // Allow clicks on the Assign/Cancel button to pass through so the Click event fires
+        if (e.OriginalSource is DependencyObject src && IsWithinElement(src, _assignButton))
+            return;
 
         // Reject left and right mouse buttons
         if (e.ChangedButton is MouseButton.Left or MouseButton.Right)
