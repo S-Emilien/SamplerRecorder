@@ -65,6 +65,9 @@ public sealed class AppSettings
     public string? WorkingDirectory { get; set; }
     public int Mp3BitRate { get; set; } = 192;
 
+    // Playback volume (0.0 - 1.0). Only affects listening volume, never recording levels.
+    public float PlaybackVolume { get; set; } = 1.0f;
+
     // Recording mode options
     public bool StartOnSound { get; set; } = false;
     public bool StopOnSilence { get; set; } = false;

@@ -164,6 +164,11 @@
                             <TextBlock Text="All Clips" FontWeight="SemiBold" FontSize="14"
                                        VerticalAlignment="Center"/>
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" FontSize="12"
+                                           Foreground="{StaticResource TextDimBrush}" Margin="0,0,4,0"/>
+                                <Slider Value="{Binding PlaybackVolume}" Minimum="0" Maximum="1"
+                                        Width="80" VerticalAlignment="Center" Margin="0,0,10,0"
+                                        ToolTip="Playback Volume"/>
                                 <Button Content="&#x21BB;" Command="{Binding RefreshClipsCommand}"
                                         Padding="0" Width="22" Height="22" FontSize="12"
                                         ToolTip="Refresh" VerticalAlignment="Center"/>
@@ -267,6 +272,15 @@
                     <TextBlock DockPanel.Dock="Left" Text="{Binding PlaybackPositionText}" FontSize="18"
                                FontWeight="Bold" FontFamily="Consolas" VerticalAlignment="Center"
                                Foreground="{StaticResource SuccessBrush}" Margin="0,0,16,0"/>
+
+                    <!-- Playback volume (shared with home screen) -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" FontSize="12"
+                                   Foreground="{StaticResource TextDimBrush}" Margin="0,0,4,0"/>
+                        <Slider Value="{Binding PlaybackVolume}" Minimum="0" Maximum="1"
+                                Width="90" VerticalAlignment="Center"
+                                ToolTip="Playback Volume"/>
+                    </StackPanel>
 
                     <!-- Playback controls -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">

@@ -60,6 +60,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StartOnSound = _settings.StartOnSound;
         StopOnSilence = _settings.StopOnSilence;
         SilenceTimeoutSeconds = _settings.SilenceTimeoutSeconds;
+        PlaybackVolume = Math.Clamp(_settings.PlaybackVolume, 0f, 1f);
         ExportFolderPath = _settings.ExportPath;
         WorkingDirectoryPath = _settings.WorkingDirectory ?? GetEffectiveWorkingDirectory();
 
@@ -112,6 +113,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _exportFolderPath = string.Empty;
     [ObservableProperty] private string _workingDirectoryPath = string.Empty;
 
+    // --- Shared playback volume (0.0 - 1.0). Playback/listening only — never affects recording. ---
+    [ObservableProperty] private float _playbackVolume = 1.0f;
+
     // --- Hotkey settings ---
     [ObservableProperty] private string _hotkeyValidationError = string.Empty;
 
@@ -156,6 +160,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectionStartChanged(long value) { OnPropertyChanged(nameof(SelectionStartText)); OnPropertyChanged(nameof(SelectionLengthText)); }
     partial void OnSelectionEndChanged(long value) { OnPropertyChanged(nameof(SelectionEndText)); OnPropertyChanged(nameof(SelectionLengthText)); }
     partial void OnPlaybackPositionChanged(double value) { OnPropertyChanged(nameof(PlaybackPositionText)); }
+
+    /// <summary>
+    /// Applies the shared playback volume to any active player immediately and persists it.
+    /// This only touches playback devices — recording input levels are never affected.
+    /// </summary>
+    partial void OnPlaybackVolumeChanged(float value)
+    {
+        var vol = Math.Clamp(value, 0f, 1f);
+        if (_wavePlayer != null) _wavePlayer.Volume = vol;
+        if (_clipPlayer != null) _clipPlayer.Volume = vol;
+        _settings.PlaybackVolume = vol;
+        _settingsService.Save(_settings);
+    }
 
     public WaveformDataService WaveformService => _waveformService;
     public AppSettings Settings => _settings;
@@ -562,6 +579,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _wavePlayer?.Dispose();
         _wavePlayer = new WaveOutEvent();
+        _wavePlayer.Volume = Math.Clamp(PlaybackVolume, 0f, 1f);
         _wavePlayer.Init(mp3Reader);
         var sessionId = ++_playbackSessionId;
         _wavePlayer.PlaybackStopped += (s, e) =>
@@ -768,6 +786,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.StartOnSound = StartOnSound;
         _settings.StopOnSilence = StopOnSilence;
         _settings.SilenceTimeoutSeconds = SilenceTimeoutSeconds;
+        _settings.PlaybackVolume = PlaybackVolume;
         _settingsService.Save(_settings);
     }
 
@@ -1062,6 +1081,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             _clipPlayer?.Dispose();
             _clipPlayer = new WaveOutEvent();
+            _clipPlayer.Volume = Math.Clamp(PlaybackVolume, 0f, 1f);
             _clipPlayer.Init(stream);
             _clipPlayer.PlaybackStopped += (s, e) =>
             {
